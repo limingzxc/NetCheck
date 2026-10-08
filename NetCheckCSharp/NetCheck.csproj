@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <AssemblyName>NetCheck</AssemblyName>
+    <RootNamespace>NetCheck</RootNamespace>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+
+    <Version>2.6.0</Version>
+    <FileVersion>2.6.0.0</FileVersion>
+    <AssemblyTitle>NetCheck 网络体检</AssemblyTitle>
+    <Product>NetCheck</Product>
+    <Company>NetCheck</Company>
+    <Description>本机网卡 / IPv6 / 公网 IP 与归属地 / DNS / 延迟·丢包·抖动 / NAT 类型 / 带宽 / 路由追踪 / 端口检测 / HTTP·HTTPS 分级连通性</Description>
+
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DebugType>embedded</DebugType>
+
+    <!--
+      注意：不要在这里写死 SelfContained / PublishSingleFile / EnableCompressionInSingleFile。
+      这些由 build.py 在命令行按版本传入；写死在这里会覆盖命令行参数，
+      导致「精简版」发布时报 NETSDK1176（压缩仅支持自包含模式）。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="icon.ico" />
+  </ItemGroup>
+
+</Project>

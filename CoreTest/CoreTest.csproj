@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>CoreTest</AssemblyName>
+    <RootNamespace>NetCheck</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- 直接复用主工程的核心代码，避免复制粘贴导致两边不一致 -->
+  <ItemGroup>
+    <Compile Include="../NetCheckCSharp/Core/**/*.cs" />
+    <!--
+      Ui 目录里只有这几个文件是纯逻辑、不依赖 WPF（Renderer.cs 依赖 System.Windows，
+      故意不引进来，否则这个测试项目就得开 UseWPF）。ReportViewBuilder 的问题判定、
+      条形图量程、代理去重全在这几个文件里。
+      Thresholds.cs 放进来是为了让「配色阈值 == 问题清单阈值」这条不变式可断言；
+      CardCatalog.cs 放进来是为了让「卡片键 ↔ 标签页索引」这条手写映射有测试守着
+      （写错的话卡片会静默变空，渲染层越界不报错）。
+    -->
+    <Compile Include="../NetCheckCSharp/Ui/ViewModels.cs" />
+    <Compile Include="../NetCheckCSharp/Ui/ReportView.cs" />
+    <Compile Include="../NetCheckCSharp/Ui/Thresholds.cs" />
+    <Compile Include="../NetCheckCSharp/Ui/CardCatalog.cs" />
+    <Compile Include="../NetCheckCSharp/Ui/SampleState.cs" />
+    <Compile Include="Tests.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+</Project>

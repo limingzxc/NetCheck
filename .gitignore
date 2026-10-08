@@ -1,0 +1,19 @@
+# 根目录 .gitignore —— 规则与 NetCheckCSharp/.gitignore 对齐，覆盖 CoreTest 等子目录
+bin/
+obj/
+publish/
+*.user
+*.suo
+.vs/
+
+# WorkBuddy AI 的会话数据（backup / memory），不属于项目
+.workbuddy-ai/
+
+# Python 缓存（check.py / build.py）
+__pycache__/
+
+# shots/ 全部是截图与测试运行产物，只保留两个截图脚本本身。
+# 注意必须用 shots/* 而不是 shots/：目录被整体忽略后，! 反选不会生效
+shots/*
+!shots/capture.ps1
+!shots/click_test.ps1

@@ -1,0 +1,25 @@
+# NetCheck 根目录 .editorconfig
+# 只规定有事故依据的少数几条，其余风格交给 dotnet format / IDE 默认。
+# 依据与说明见 CODE_REVIEW.md 第 2.3 节。
+root = true
+
+[*]
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# 明确列出文本类型并统一 UTF-8；.bat 故意不在列 ——
+# 批处理按代码页读取，中文批处理被编辑器转存成 UTF-8 反而会乱码。
+[*.{cs,xaml,csproj,py,md,json}]
+charset = utf-8
+
+[*.ps1]
+# PowerShell 5.1 按 ANSI 读无 BOM 的脚本，中文全乱码（README「测试」一节踩过）
+charset = utf-8-bom
+
+[*.{cs,xaml,csproj,py}]
+indent_style = space
+indent_size = 4
+
+[*.md]
+# Markdown 行尾双空格是换行语法，不裁
+trim_trailing_whitespace = false

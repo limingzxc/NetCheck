@@ -1,0 +1,260 @@
+<Window x:Class="NetCheck.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NetCheck 网络体检" Height="880" Width="1180"
+        MinHeight="620" MinWidth="940"
+        Background="{StaticResource BgBrush}"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Microsoft YaHei UI"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+
+  <DockPanel>
+
+    <!-- ==================== 菜单栏 ==================== -->
+    <Menu DockPanel.Dock="Top" Style="{StaticResource AppMenu}"
+          ItemContainerStyle="{StaticResource AppMenuItem}">
+      <MenuItem Header="文件(_F)">
+        <MenuItem Header="导出报告…" InputGestureText="Ctrl+S" Click="BtnSave_Click"/>
+        <MenuItem Header="复制全文" InputGestureText="Ctrl+C" Click="BtnCopy_Click"/>
+        <MenuItem Header="导出诊断包…" InputGestureText="Ctrl+B" Click="BtnBundle_Click"/>
+        <MenuItem Header="导出诊断包（脱敏）…" InputGestureText="Ctrl+Shift+B" Click="BtnBundleMasked_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <MenuItem Header="打开配置目录" Click="MenuOpenSettings_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <MenuItem Header="退出" InputGestureText="Alt+F4" Click="MenuExit_Click"/>
+      </MenuItem>
+
+      <MenuItem x:Name="MenuDetect" Header="检测(_R)"
+                SubmenuOpened="MenuDetect_SubmenuOpened">
+        <MenuItem Header="一键检测" InputGestureText="F5" Click="BtnQuick_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <MenuItem Header="重新读取本机配置" Click="BtnLocal_Click"/>
+        <MenuItem Header="出口 IP 检测" Click="BtnEgress_Click"/>
+        <MenuItem Header="延迟检测" Click="BtnLatency_Click"/>
+        <MenuItem Header="带宽测速" Click="BtnSpeed_Click"/>
+        <MenuItem Header="DNS 检测" Click="BtnDns_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <MenuItem Header="IPv6 检测" Click="BtnIpv6_Click"/>
+        <MenuItem Header="网页连通性检测" Click="BtnWeb_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <MenuItem Header="NAT 类型检测" Click="BtnNat_Click"/>
+        <MenuItem Header="路由追踪" Click="BtnTrace_Click"/>
+        <MenuItem Header="MTU 探测" Click="BtnMtu_Click"/>
+        <MenuItem Header="端口检测" Click="BtnPort_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <!-- Tag 供 MenuDetect_SubmenuOpened 识别：忙碌时这一项要留着可点 -->
+        <MenuItem Header="取消当前检测" InputGestureText="Esc" Tag="cancel" Click="BtnCancel_Click"/>
+      </MenuItem>
+
+      <MenuItem Header="视图(_V)">
+        <MenuItem Header="展开全部检测项" Click="MenuExpandAll_Click"/>
+        <MenuItem Header="收起全部检测项" Click="MenuCollapseAll_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <MenuItem Header="显示检测选项" Click="MenuShowOptions_Click"/>
+        <Separator Style="{StaticResource AppSeparator}"/>
+        <!-- 跳转目标由 Tag 决定，不需要 x:Name。
+             Tag 一律写卡片键名而不是数字：数字绑定的是卡片顺序，
+             插一张卡片就要全部跟着改，而且漏改一处不会报错、只会跳到错的卡片。 -->
+        <MenuItem Header="滚动到：概览"     Click="MenuTab_Click" Tag="overview"/>
+        <MenuItem Header="滚动到：本机"     Click="MenuTab_Click" Tag="local"/>
+        <MenuItem Header="滚动到：公网出口" Click="MenuTab_Click" Tag="egress"/>
+        <MenuItem Header="滚动到：连通性"   Click="MenuTab_Click" Tag="link"/>
+        <MenuItem Header="滚动到：DNS"      Click="MenuTab_Click" Tag="dns"/>
+        <MenuItem Header="滚动到：路径"     Click="MenuTab_Click" Tag="path"/>
+        <MenuItem Header="滚动到：NAT"      Click="MenuTab_Click" Tag="nat"/>
+        <MenuItem Header="滚动到：端口"     Click="MenuTab_Click" Tag="port"/>
+        <MenuItem Header="滚动到：IPv6"     Click="MenuTab_Click" Tag="ipv6"/>
+        <MenuItem Header="滚动到：网页"     Click="MenuTab_Click" Tag="web"/>
+      </MenuItem>
+
+      <MenuItem Header="帮助(_H)">
+        <MenuItem Header="使用说明" Click="MenuHelp_Click"/>
+        <MenuItem Header="关于 NetCheck" Click="MenuAbout_Click"/>
+      </MenuItem>
+    </Menu>
+
+    <!-- ==================== 工具栏 ====================
+         这里只放「全局动作」。各项检测的入口在下面各自的卡片标题栏里，
+         和它对应的展示区域在一起 —— 同一个功能不再出现在两个地方。 -->
+    <Border DockPanel.Dock="Top" Style="{StaticResource ToolBarArea}">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <!-- 左列用 * ：窗口变窄时先压缩左组并换行，右组始终贴右边完整可见 -->
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <WrapPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left">
+          <Button x:Name="BtnQuick" Content="一键检测" Style="{StaticResource PrimaryButton}"
+                  Click="BtnQuick_Click"
+                  ToolTip="本机配置 + 出口 IP + DNS + 延迟，约 6 秒（F5）"/>
+          <Button x:Name="BtnToggleAll" Content="全部收起" Style="{StaticResource SoftButton}"
+                  Click="BtnToggleAll_Click"
+                  ToolTip="把所有检测项卡片收起来，只看标题和结论"/>
+        </WrapPanel>
+
+        <WrapPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="BtnCancel" Content="取消" Style="{StaticResource SoftButton}"
+                  Click="BtnCancel_Click" IsEnabled="False" ToolTip="中断当前检测（Esc）"/>
+          <Button x:Name="BtnCopy" Content="复制全文" Style="{StaticResource SoftButton}"
+                  Click="BtnCopy_Click" IsEnabled="False" ToolTip="把完整报告复制到剪贴板（Ctrl+C）"/>
+          <Button x:Name="BtnSave" Content="导出报告" Style="{StaticResource SoftButton}"
+                  Click="BtnSave_Click" IsEnabled="False" ToolTip="导出为 txt 或 json（Ctrl+S）"/>
+          <Button x:Name="BtnBundle" Content="诊断包" Style="{StaticResource SoftButton}"
+                  Click="BtnBundle_Click" IsEnabled="False"
+                  ToolTip="报告 + 原始数据 + 系统网络命令输出，打包成 zip（Ctrl+B）"/>
+          <Button x:Name="BtnBundleMask" Content="脱敏包" Style="{StaticResource SoftButton}"
+                  Click="BtnBundleMasked_Click" IsEnabled="False"
+                  ToolTip="同上，但主机名 / MAC / 公网 IP 打码后再打包 —— 要发给别人时用这个（Ctrl+Shift+B）"/>
+        </WrapPanel>
+      </Grid>
+    </Border>
+
+    <!-- ==================== 状态栏 ==================== -->
+    <Border DockPanel.Dock="Bottom" Style="{StaticResource StatusBarArea}">
+      <Grid Height="30">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <TextBlock x:Name="LblStatus" Grid.Column="0" FontSize="12"
+                   Foreground="{StaticResource MutedBrush}"
+                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                   Text="正在读取本机网络配置…"/>
+
+        <TextBlock x:Name="LblSummary" Grid.Column="1" FontSize="12"
+                   Foreground="{StaticResource MutedBrush}"
+                   VerticalAlignment="Center" Margin="16,0,14,0"/>
+
+        <ProgressBar x:Name="Bar" Grid.Column="2" Style="{StaticResource FlatProgress}"
+                     Width="130" VerticalAlignment="Center" Visibility="Collapsed"/>
+      </Grid>
+    </Border>
+
+    <!-- ==================== 内容区 ====================
+         单页纵向滚动：一个检测项一张卡片，标题栏自带「运行」按钮和问题角标，
+         点标题栏可以折叠。检测选项也是一张卡片，排在最前面。 -->
+    <ScrollViewer x:Name="PageScroll"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Padding="0,14,4,14"
+                  Background="{StaticResource BgBrush}">
+      <!--
+        HorizontalAlignment 必须是 Stretch 而不是 Center：
+        Center 会让 StackPanel 缩到「内容宽度」，卡片一收起来就变成一条窄条。
+        Stretch 才会吃满视口宽度，再由 MaxWidth 封顶（超过 1240 时 WPF 会自动居中）。
+      -->
+      <StackPanel x:Name="SectionHost" MaxWidth="1240" HorizontalAlignment="Stretch">
+
+        <!--
+          检测选项的输入控件。声明在这里是为了保留 x:Name 与设计器预览，
+          构造函数里会把它从 SectionHost 摘出来、塞进统一生成的「检测选项」卡片里。
+        -->
+        <StackPanel x:Name="OptionsFields" Visibility="Collapsed">
+        <WrapPanel>
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="目标主机" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtHost" Style="{StaticResource CompactInput}" Margin="0"
+                     KeyDown="TxtHost_KeyDown" LostFocus="Options_Changed"
+                     ToolTip="路由追踪 / MTU 探测 / 端口检测的目标。填好后按回车直接开始路由追踪"/>
+            <TextBlock Text="路由追踪 / MTU / 端口检测使用此目标（回车 = 路由追踪）"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="网页目标" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtWebTarget" Style="{StaticResource CompactInput}" Margin="0"
+                     KeyDown="TxtWebTarget_KeyDown" LostFocus="Options_Changed"
+                     ToolTip="HTTP / HTTPS 检测额外要测的站点，如 example.com 或 https://example.com/a。留空则只测内置目标"/>
+            <TextBlock Text="HTTP / HTTPS 检测使用此域名（可留空，回车 = 立即检测）"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="端口预设" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <ComboBox x:Name="CmbPreset" Style="{StaticResource CompactCombo}" Margin="0"
+                      SelectionChanged="CmbPreset_SelectionChanged"/>
+            <TextBlock Text="选「自定义」后下面的表达式才完全由你决定"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="端口表达式" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtPorts" Style="{StaticResource CompactInput}" Margin="0"
+                     KeyDown="TxtPorts_KeyDown" LostFocus="Options_Changed"
+                     ToolTip="逗号 / 空格 / 分号分隔，支持 8000-8010 范围写法。填好后按回车直接开始端口检测"/>
+            <TextBlock x:Name="LblPortHint" Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="端口并发数" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtConcurrency" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="1 ~ 512。过高可能被防火墙判定为扫描"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="端口超时（毫秒）" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtPortTimeout" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="100 ~ 15000。内网可调小，跨公网建议 1500 以上"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="延迟探测次数" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtRounds" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="1 ~ 20。次数越多抖动数据越准"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="路由最大跳数" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtMaxHops" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="1 ~ 64。到公网目标一般 15 跳内就结束了"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="路由单跳超时（毫秒）" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtTraceTimeout" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="200 ~ 5000。跨公网跳数多、丢包重时调大"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="测速时长（秒）" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtSpeedSeconds" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="3 ~ 60。时长越长结果越稳，但流量也越多"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12">
+            <TextBlock Text="DNS 超时（毫秒）" Style="{StaticResource OptionLabel}" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtDnsTimeout" Style="{StaticResource CompactInput}" Margin="0"
+                     LostFocus="Options_Changed"/>
+            <TextBlock Text="300 ~ 10000。公共 DNS 通常 2500 足够"
+                       Style="{StaticResource OptionHint}" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <StackPanel Width="238" Margin="0,0,16,12" VerticalAlignment="Bottom">
+            <Button x:Name="BtnResetOptions" Content="恢复默认选项"
+                    Style="{StaticResource SoftButton}" Margin="0,0,0,22"
+                    HorizontalAlignment="Stretch"
+                    Click="BtnResetOptions_Click"/>
+          </StackPanel>
+        </WrapPanel>
+      </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+</Window>
