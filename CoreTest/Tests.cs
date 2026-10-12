@@ -72,6 +72,7 @@ internal static class Tests
         CommandLine();
         ReportViewCore();
         IssueRules();
+        SummaryRowConsistency();
         ThresholdConsistency();
         CardCatalogChecks();
         ProxyMerging();
@@ -1368,6 +1369,209 @@ internal static class Tests
         });
         T.Eq(clean.Issues.Count(i => i.Tone != Tone.Good), 0, "全部正常时没有告警项");
         T.True(clean.Issues.Any(i => i.Title == "未发现明显问题"), "全部正常时给出「未发现明显问题」");
+    }
+
+    // ==================================================================
+    // 8a-2. 概览摘要行 ↔ 问题清单同源（2026-10-12 首次全量审查回归）
+    //
+    // 背景：Thresholds 的「同源不变式」原先只覆盖指标卡与胶囊，
+    // 概览「检测摘要」里的键值行绕过了它 —— 于是出现了
+    // 「DNS 服务器全好却是橙色」「路由跑满 30 跳没到达，界面橙、清单空」
+    // 两起口径分裂。这个组把防线补到摘要行上。
+    // ==================================================================
+
+    private static void SummaryRowConsistency()
+    {
+        T.Group("ReportViewBuilder.摘要行同源");
+
+        static KeyValueRow Row(ReportView v, string key)
+            => v.Tabs[ReportViewBuilder.OverviewIndex].Sections[0].Kv.First(x => x.Key == key);
+
+        static MetricCard Card(ReportView v, string title)
+            => v.Cards.First(c => c.Title == title);
+
+        // P0 不变式：摘要行里出现 Warn / Bad，问题清单里就必须有一条同色条目。
+        // 「网关 5 ms 条形画橙、清单却 >15 ms 才报」那次事故的通用形式。
+        static void ProblemRowsHaveIssues(ReportView v, string what)
+        {
+            foreach (var r in v.Tabs[ReportViewBuilder.OverviewIndex].Sections[0].Kv
+                                .Where(x => x.Tone is Tone.Warn or Tone.Bad))
+                T.True(v.Issues.Any(i => i.Tone == r.Tone),
+                    $"{what}：摘要行「{r.Key}」是{r.Tone}，问题清单里有同色条目");
+        }
+
+        // ---- DNS 服务器行：条件曾经整个写反 ----
+        var v = ReportViewBuilder.Build(new DiagState
+        {
+            DnsServers = new List<string> { "223.5.5.5", "119.29.29.29" },
+            DnsServerTests = new List<DnsServerTest>
+            {
+                new() { Server = "223.5.5.5", Ms = 6.8, Answers = 2 },
+                new() { Server = "119.29.29.29", Ms = 9.1, Answers = 2 },
+            },
+        });
+        T.Eq(Row(v, "DNS 服务器").Tone, Tone.Good, "DNS 全部正常 → 摘要行是绿色");
+        T.False(v.Issues.Any(i => i.Title.Contains("DNS 服务器")), "DNS 全部正常 → 没有问题条目");
+        ProblemRowsHaveIssues(v, "DNS 全好");
+
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            DnsServers = new List<string> { "223.5.5.5", "119.29.29.29" },
+            DnsServerTests = new List<DnsServerTest>
+            {
+                new() { Server = "223.5.5.5", Ms = 6.8, Answers = 2 },
+                new() { Server = "119.29.29.29", Error = "超时" },
+            },
+        });
+        T.Eq(Row(v, "DNS 服务器").Tone, Tone.Warn, "有 DNS 无响应 → 摘要行是橙色");
+        T.True(v.Issues.Any(i => i.Title.Contains("119.29.29.29") && i.Tone == Tone.Warn),
+            "DNS 无响应 → 问题清单里有同色条目");
+        ProblemRowsHaveIssues(v, "DNS 一台无响应");
+
+        // ---- 路由追踪行 ----
+        // 跑满最大跳数没到达：以前这里界面是橙的，问题清单却一条都没有。
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            Traceroute = new TracerouteReport
+            {
+                Target = "1.1.1.1",
+                Hops =
+                {
+                    new HopInfo { Ttl = 1, Address = "10.0.0.1", Status = "中间跳" },
+                    new HopInfo { Ttl = 2, Address = "10.0.0.2", Status = "中间跳" },
+                },
+            },
+        });
+        T.Eq(Row(v, "路由追踪").Tone, Tone.Warn, "路由未到达目标 → 摘要行是橙色");
+        T.True(v.Issues.Any(i => i.Title.Contains("路由追踪") && i.Tone == Tone.Warn),
+            "路由未到达 → 问题清单里有同色条目");
+        ProblemRowsHaveIssues(v, "路由未到达");
+
+        // 被 ICMP 屏蔽提前结束：不是故障（文本报告明说「不代表网络不通」），中性色、不进清单。
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            Traceroute = new TracerouteReport
+            {
+                Target = "1.1.1.1",
+                StoppedEarly = true,
+                Hops = { new HopInfo { Ttl = 1, Status = "超时" } },
+            },
+        });
+        T.Eq(Row(v, "路由追踪").Tone, Tone.Neutral, "路由被屏蔽提前结束 → 摘要行是中性色");
+        T.False(v.Issues.Any(i => i.Title.Contains("路由追踪")), "提前结束不产生问题条目");
+
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            Traceroute = new TracerouteReport
+            {
+                Target = "1.1.1.1",
+                Reached = true,
+                Hops = { new HopInfo { Ttl = 9, Address = "1.1.1.1", Status = "到达" } },
+            },
+        });
+        T.Eq(Row(v, "路由追踪").Tone, Tone.Good, "路由已到达 → 摘要行是绿色");
+        T.False(v.Issues.Any(i => i.Title.Contains("路由追踪")), "路由已到达不产生问题条目");
+
+        // ---- 公网出口：告警条件曾经是 ||，两个方向都误报 ----
+        // STUN 被墙但 HTTP 直连成功（禁 UDP 网络里很常见）—— 出口 IP 明明拿到了。
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            PublicIpDirect = "不可用",
+            PublicIpHttpDirect = new List<PublicIpResult> { new() { Service = "a", Ip = "1.1.1.1" } },
+        });
+        T.False(v.Issues.Any(i => i.Title.Contains("未能获取公网出口 IP")),
+            "STUN 失败但 HTTP 成功 → 不误报「未能获取公网出口 IP」");
+        T.Eq(Card(v, "公网出口").Value, "1.1.1.1", "HTTP 成功时出口卡片显示拿到的 IP");
+
+        // STUN 成功但三台 HTTP 服务全失败 —— 也不该拿「所有探测路径都失败了」骗人。
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            PublicIpDirect = "203.0.113.9",
+            PublicIpHttpDirect = new List<PublicIpResult> { new() { Service = "a", Error = "超时" } },
+        });
+        T.False(v.Issues.Any(i => i.Title.Contains("未能获取公网出口 IP")),
+            "STUN 成功但 HTTP 全失败 → 不误报");
+
+        // 全部路径（含经代理）都失败 —— 仍然要报。
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            PublicIpDirect = "不可用",
+            PublicIpHttpDirect = new List<PublicIpResult> { new() { Service = "a", Error = "超时" } },
+            PublicIpHttpProxy = new List<PublicIpResult> { new() { Service = "b", Error = "超时" } },
+        });
+        T.True(v.Issues.Any(i => i.Title.Contains("未能获取公网出口 IP")),
+            "三条路径全失败 → 报「未能获取公网出口 IP」");
+
+        // 代理路径拿到一个也算拿到。
+        v = ReportViewBuilder.Build(new DiagState
+        {
+            PublicIpDirect = "不可用",
+            PublicIpHttpDirect = new List<PublicIpResult> { new() { Service = "a", Error = "超时" } },
+            PublicIpHttpProxy = new List<PublicIpResult> { new() { Service = "b", Ip = "5.6.7.8" } },
+        });
+        T.False(v.Issues.Any(i => i.Title.Contains("未能获取公网出口 IP")),
+            "代理路径成功 → 不误报");
+
+        // ---- 路径 MTU：摘要行曾经内联写死 1500，绕过了 Thresholds.Mtu ----
+        foreach (var (mtu, expected) in new[] { (1300, Tone.Bad), (1450, Tone.Warn), (1500, Tone.Good) })
+        {
+            v = ReportViewBuilder.Build(new DiagState
+            {
+                Mtu = new MtuReport { Target = "1.1.1.1", Reachable = true, PathMtu = mtu },
+            });
+            T.Eq(Row(v, "路径 MTU").Tone, expected, $"MTU {mtu} → 摘要行与 Thresholds.Mtu 同源");
+            T.Eq(Thresholds.Mtu(mtu), expected, $"MTU {mtu} → 阈值函数本身同档");
+            ProblemRowsHaveIssues(v, $"MTU {mtu}");
+        }
+
+        // ---- 一个「什么都差」的合成态：整张摘要表逐个过不变式 ----
+        var bad = ReportViewBuilder.Build(new DiagState
+        {
+            Adapters = new List<AdapterInfo>
+            {
+                new() { Name = "WLAN", IsUp = true, IPv4 = "10.0.0.2", Gateway = "10.0.0.1", Dns = { "223.5.5.5" } },
+            },
+            PublicIpDirect = "不可用",
+            PublicIpHttpDirect = new List<PublicIpResult> { new() { Service = "a", Error = "超时" } },
+            DnsServers = new List<string> { "223.5.5.5" },
+            DnsServerTests = new List<DnsServerTest> { new() { Server = "223.5.5.5", Error = "超时" } },
+            Latency = new LatencyReport
+            {
+                Gateway = new LatencyTarget { Name = "网关", Host = "10.0.0.1", Method = "ICMP", Avg = 22, Samples = { 20, 22, 25 } },
+                Targets = { new LatencyTarget { Name = "百度", Category = "网页浏览", Host = "www.baidu.com", Method = "ICMP", Avg = 120, Loss = 5, Samples = { 110, 120, 130 } } },
+            },
+            BandwidthDirect = new BandwidthReport { Source = "镜像", Bytes = 3_750_000, Seconds = 10 },
+            Mtu = new MtuReport { Target = "1.1.1.1", Reachable = true, PathMtu = 1300 },
+            Nat = new NatReport { Type = "对称型 NAT（Symmetric）" },
+            Traceroute = new TracerouteReport
+            {
+                Target = "1.1.1.1",
+                Hops = { new HopInfo { Ttl = 1, Address = "10.0.0.1", Status = "中间跳" } },
+            },
+            Ipv6 = new Ipv6Report
+            {
+                Addresses = { new Ipv6AddressInfo { Address = "2408::1", Kind = "全局", Adapter = "WLAN" } },
+                Pings =
+                {
+                    new Ipv6PingResult { Name = "AliDNS", Region = "国内", Error = "超时" },
+                    new Ipv6PingResult { Name = "Cloudflare", Region = "国外", Error = "超时" },
+                },
+            },
+            Web = new WebReport
+            {
+                Targets =
+                {
+                    new WebTargetResult { Name = "百度", Region = "国内", Host = "www.baidu.com",
+                        Steps = { new WebStep { Name = "DNS", Ok = true }, new WebStep { Name = "TCP", Ok = true },
+                                  new WebStep { Name = "TLS", Ok = true }, new WebStep { Name = "HTTP", Ok = true } } },
+                    new WebTargetResult { Name = "Cloudflare", Region = "境外", Host = "www.cloudflare.com",
+                        Steps = { new WebStep { Name = "DNS", Ok = true }, new WebStep { Name = "TCP", Ok = false, Error = "连接超时" } } },
+                },
+            },
+        });
+        ProblemRowsHaveIssues(bad, "合成态");
+        T.True(bad.Issues.Count(i => i.Tone is Tone.Warn or Tone.Bad) >= 8,
+            "合成态确实触发了多条告警（否则上面那条不变式是空跑）");
     }
 
     // ==================================================================

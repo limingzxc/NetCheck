@@ -123,7 +123,7 @@ DNS → TCP(443) → TLS → HTTP 四层**严格串行**跑，第一层失败就
 ## 测试
 
 ```bash
-python check.py            # 编译 + 单元测试（1220 条断言，约 15 秒）
+python check.py            # 编译 + 单元测试（1255 条断言，约 15 秒）
 python check.py --e2e      # 再加上端到端集成测试（约 1.5 分钟）
 ```
 

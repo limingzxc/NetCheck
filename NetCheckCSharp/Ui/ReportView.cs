@@ -468,7 +468,16 @@ public static class ReportViewBuilder
         }
 
         // ---- 公网出口 ----
-        if (s.PublicIpDirect == "不可用" || (s.PublicIpHttpDirect != null && s.PublicIpHttpDirect.All(r => !r.Ok)))
+        // 判据是「一条能用的路径都没有」而不是「某一条路径失败」。
+        // STUN 被墙但 HTTP 直连成功，在限制 UDP 的网络里很常见 —— 那种情况下
+        // 出口 IP 明明拿到了，再报「未能获取」就是自己吓自己；
+        // 反过来 STUN 成功、三台 HTTP 服务全失败也一样（「所有探测路径都失败了」
+        // 是句假话）。AllPublicIps() 已经会把哨兵值（不可用 / 解析失败）滤掉，
+        // 所以它为空就是「真的一个地址都没拿到」。
+        bool egressRan = s.PublicIpDirect != null
+                         || s.PublicIpHttpDirect != null
+                         || s.PublicIpHttpProxy != null;
+        if (egressRan && ips.Count == 0)
             list.Add(new IssueRow
             {
                 Tone = Tone.Warn,
@@ -783,6 +792,18 @@ public static class ReportViewBuilder
                 Detail = s.Traceroute.Error,
                 TargetTab = PathIndex,
             });
+        else if (s.Traceroute is { Ok: true, Reached: false, StoppedEarly: false } tr)
+            // 跑满最大跳数没到达：不是报错，但摘要行会为它亮橙色 ——
+            // 亮色就必须有对应条目，否则就是「网关 5 ms」那次事故的重演。
+            // （StoppedEarly 走中性色，明确不进这里。）
+            list.Add(new IssueRow
+            {
+                Tone = Tone.Warn,
+                Title = $"路由追踪未到达目标（{tr.Hops.Count} 跳）",
+                Detail = "已达到最大跳数仍未到达 " + tr.Target + "。可能是目标屏蔽了 ICMP 应答，"
+                       + "也可能是后半段路径不通 —— 翻到「路径」卡片看最后一跳停在哪里。",
+                TargetTab = PathIndex,
+            });
 
         if (list.Count == 0)
             list.Add(new IssueRow
@@ -922,7 +943,10 @@ public static class ReportViewBuilder
             {
                 Key = "路径 MTU",
                 Value = s.Mtu.PathMtu.ToString(),
-                Tone = s.Mtu.PathMtu >= 1500 ? Tone.Good : Tone.Warn,
+                // 必须走 Thresholds.Mtu —— 和胶囊、问题条目同一个函数。
+                // 这里曾内联写死「>=1500 ? Good : Warn」，MTU 1300 时摘要行是橙色、
+                // 同屏胶囊却是红色，同一行数据两个说法。
+                Tone = Thresholds.Mtu(s.Mtu.PathMtu),
                 Note = "目标 " + s.Mtu.Target,
             });
 
@@ -931,7 +955,12 @@ public static class ReportViewBuilder
             {
                 Key = "路由追踪",
                 Value = s.Traceroute.Hops.Count + " 跳",
-                Tone = s.Traceroute.Reached ? Tone.Good : Tone.Warn,
+                // 「提前结束」不是故障 —— 中间设备屏蔽 ICMP 不代表网络不通
+                // （文本报告里也是这么说的），所以是中性色、不进问题清单。
+                // 只有「跑满最大跳数还没到」才值得橙色，那一条在问题清单里有对应条目。
+                Tone = s.Traceroute.Reached ? Tone.Good
+                     : s.Traceroute.StoppedEarly ? Tone.Neutral
+                     : Tone.Warn,
                 Note = s.Traceroute.Reached ? "已到达 " + s.Traceroute.Target
                        : s.Traceroute.StoppedEarly ? "中途被屏蔽，未能到达" : s.Traceroute.Target,
             });
@@ -1055,7 +1084,7 @@ public static class ReportViewBuilder
                 Key = "原生 UDP（STUN）",
                 Value = s.PublicIpDirect,
                 Geo = IpGeo.Of(s, s.PublicIpDirect),
-                Tone = s.PublicIpDirect == "不可用" ? Tone.Warn : Tone.Good,
+                Tone = s.PublicIpDirect == StunAndNat.Unavailable ? Tone.Warn : Tone.Good,
             });
 
         if (s.PublicIpHttpDirect != null)
