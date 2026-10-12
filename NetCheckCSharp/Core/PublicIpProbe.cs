@@ -36,6 +36,12 @@ public static class PublicIpProbe
         return client;
     }
 
+    /// <summary>
+    /// 响应里没能认出 IP 时的哨兵值。和 <see cref="StunAndNat.Unavailable"/> 一样，
+    /// 存在的意义是让「没值」和「空串」可区分；过滤方引用常量而不是字面量。
+    /// </summary>
+    public const string ParseFailed = "解析失败";
+
     public static async Task<List<PublicIpResult>> QueryHttpAsync(bool useProxy, CancellationToken ct)
     {
         var list = new List<PublicIpResult>();
@@ -65,7 +71,7 @@ public static class PublicIpProbe
                     if (mm.Success) r.Extra = mm.Groups[1].Value.Trim();
                 }
 
-                if (r.Ip.Length == 0) r.Ip = "解析失败";
+                if (r.Ip.Length == 0) r.Ip = ParseFailed;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {

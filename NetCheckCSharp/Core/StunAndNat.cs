@@ -23,6 +23,13 @@ public static class StunAndNat
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// 全部 STUN 服务器都未回应时的哨兵值（不是异常、不是 IP）。
+    /// 集中在这里，比较方（<see cref="DiagState.AllPublicIps"/>、Ui 层）引用同一个常量，
+    /// 避免「改了一处忘了另一处」之后字符串悄悄对不上。
+    /// </summary>
+    public const string Unavailable = "不可用";
+
+    /// <summary>
     /// STUN 服务器，按「国内可达」排序。
     ///
     /// 前三台是国内大厂的公共服务（实测 28~35 ms），不依赖任何境外链路。
@@ -65,7 +72,7 @@ public static class StunAndNat
             var obs = await QueryOneAsync(udp, host, port, ct).ConfigureAwait(false);
             if (obs.Ok) return obs.MappedIp;
         }
-        return "不可用";
+        return Unavailable;
     }
 
     /// <summary>

@@ -118,8 +118,12 @@ public static class DiagBundle
 
             // 5. 打包
             progress?.Report("压缩…");
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            ZipFile.CreateFromDirectory(temp, zipPath, CompressionLevel.Optimal, false);
+            // 先写 .part 再替换，而不是先删旧包：导出中途失败时上一版 zip 还在，
+            // 不然用户手上唯一的诊断包会被一次失败的导出弄丢。
+            var partPath = zipPath + ".part";
+            if (File.Exists(partPath)) File.Delete(partPath);
+            ZipFile.CreateFromDirectory(temp, partPath, CompressionLevel.Optimal, false);
+            File.Move(partPath, zipPath, overwrite: true);
 
             var fi = new FileInfo(zipPath);
             result.Ok = true;

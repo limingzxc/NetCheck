@@ -56,6 +56,9 @@ public static class DnsProbe
         {
             var query = BuildQuery(domain, out ushort id);
             using var udp = new UdpClient();
+            // Connect 到服务器端点：只接收它的响应。多台并行测试时各用各的 socket，
+            // 但连上之后至少不会把别的源地址来的包当成这一台的回答
+            udp.Connect(server, 53);
             var sw = Stopwatch.StartNew();
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -128,6 +131,9 @@ public static class DnsProbe
     /// 用一个随机生成、保证不存在的域名去问各个 DNS。
     /// 正常情况应该返回 NXDOMAIN（rcode=3）或空答案；
     /// 若返回了 A 记录，说明该 DNS 在做广告注入或劫持 —— 这个判据几乎不会误报。
+    ///
+    /// 四台服务器**并行**查询：串行时一台被拦就要白等满一个超时，
+    /// 四台最坏 12 秒起步，而用户只是想知道自己的 DNS 干不干净。
     /// </summary>
     public static async Task<HijackReport> DetectHijackAsync(CancellationToken ct)
     {
@@ -137,82 +143,99 @@ public static class DnsProbe
         var probeDomain = $"no-such-{suffix}.com";
         report.ProbeDomain = probeDomain;
 
-        foreach (var server in CompareServers)
-        {
-            ct.ThrowIfCancellationRequested();
-            var item = new HijackCheck { Server = server };
-            try
-            {
-                var query = BuildQuery(probeDomain, out ushort id);
-                using var udp = new UdpClient();
+        report.Checks.AddRange(await Task.WhenAll(
+            CompareServers.Select(server => ProbeHijackAsync(server, probeDomain, ct)))
+            .ConfigureAwait(false));
 
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(3000);
-
-                await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
-                var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
-
-                var (rcode, answers) = ParseResponse(resp.Buffer, id);
-                item.RCode = rcode;
-                item.Answers = answers;
-                item.Ok = true;
-                item.Hijacked = rcode == 0 && answers.Count > 0;
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                item.Error = "超时";
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                item.Error = ex.Message.Length > 40 ? ex.Message[..40] : ex.Message;
-            }
-            report.Checks.Add(item);
-        }
-
-        // 再对比几个真实域名在各 DNS 上的解析结果差异
+        // 再对比几个真实域名在各 DNS 上的解析结果差异。
+        // 域名之间仍然串行（两个域名各 3 秒超时，再并行也只省 3 秒，不值得复杂化），
+        // 但每个域名下的四台服务器并行 —— 以前 2 域名 × 4 台串行，最坏 24 秒。
         foreach (var domain in new[] { "www.baidu.com", "github.com" })
         {
             ct.ThrowIfCancellationRequested();
             var cmp = new DnsComparison { Domain = domain };
-            foreach (var server in CompareServers)
-            {
-                try
-                {
-                    var query = BuildQuery(domain, out ushort id);
-                    using var udp = new UdpClient();
-                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    cts.CancelAfter(3000);
-
-                    await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
-                    var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
-                    var (_, answers) = ParseResponse(resp.Buffer, id);
-
-                    cmp.Entries.Add(new DnsComparisonEntry
-                    {
-                        Server = server,
-                        Addresses = answers.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList(),
-                        Ok = true,
-                    });
-                }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                {
-                    cmp.Entries.Add(new DnsComparisonEntry { Server = server, Error = "超时" });
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    cmp.Entries.Add(new DnsComparisonEntry
-                    {
-                        Server = server,
-                        Error = ex.Message.Length > 40 ? ex.Message[..40] : ex.Message
-                    });
-                }
-            }
+            cmp.Entries.AddRange(await Task.WhenAll(
+                CompareServers.Select(server => ProbeCompareAsync(server, domain, ct)))
+                .ConfigureAwait(false));
             report.Comparisons.Add(cmp);
         }
 
         return report;
+    }
+
+    /// <summary>向一台 DNS 问探针域名，看它会不会对不存在的域名返回答案。</summary>
+    private static async Task<HijackCheck> ProbeHijackAsync(
+        string server, string probeDomain, CancellationToken ct)
+    {
+        var item = new HijackCheck { Server = server };
+        try
+        {
+            var query = BuildQuery(probeDomain, out ushort id);
+            using var udp = new UdpClient();
+            // Connect 到服务器端点：只接收它的响应，别的源地址来的包不进接收队列
+            udp.Connect(server, 53);
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(3000);
+
+            await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
+            var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
+
+            var (rcode, answers) = ParseResponse(resp.Buffer, id);
+            item.RCode = rcode;
+            item.Answers = answers;
+            item.Ok = true;
+            item.Hijacked = rcode == 0 && answers.Count > 0;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            item.Error = "超时";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            item.Error = ex.Message.Length > 40 ? ex.Message[..40] : ex.Message;
+        }
+        return item;
+    }
+
+    /// <summary>向一台 DNS 问真实域名，记录它给出的地址集合。</summary>
+    private static async Task<DnsComparisonEntry> ProbeCompareAsync(
+        string server, string domain, CancellationToken ct)
+    {
+        try
+        {
+            var query = BuildQuery(domain, out ushort id);
+            using var udp = new UdpClient();
+            udp.Connect(server, 53);
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(3000);
+
+            await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
+            var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
+            var (_, answers) = ParseResponse(resp.Buffer, id);
+
+            return new DnsComparisonEntry
+            {
+                Server = server,
+                Addresses = answers.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList(),
+                Ok = true,
+            };
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new DnsComparisonEntry { Server = server, Error = "超时" };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new DnsComparisonEntry
+            {
+                Server = server,
+                Error = ex.Message.Length > 40 ? ex.Message[..40] : ex.Message
+            };
+        }
     }
 
     // ------------------------------------------------------------------

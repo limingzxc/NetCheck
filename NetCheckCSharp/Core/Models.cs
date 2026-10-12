@@ -219,16 +219,20 @@ public sealed class DiagState
     public PortScanReport? PortScan { get; set; }
     public MtuReport? Mtu { get; set; }
 
-    /// <summary>跨路径收集到的全部公网 IP，用于判断是否存在多出口。</summary>
-    public List<string> AllPublicIps()
-    {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var list in new[] { PublicIpHttpProxy, PublicIpHttpDirect })
-            if (list != null)
-                foreach (var r in list)
-                    if (r.Ok && r.Ip != "解析失败") set.Add(r.Ip);
-        if (!string.IsNullOrWhiteSpace(PublicIpDirect) && PublicIpDirect != "不可用")
-            set.Add(PublicIpDirect!);
-        return set.OrderBy(x => x, StringComparer.Ordinal).ToList();
-    }
+        /// <summary>
+        /// 跨路径收集到的全部公网 IP，用于判断是否存在多出口。
+        /// 哨兵值（<see cref="StunAndNat.Unavailable"/> / <see cref="PublicIpProbe.ParseFailed"/>）
+        /// 在这里被滤掉 —— 它们标记的是「这一条路没问到」，不是地址。
+        /// </summary>
+        public List<string> AllPublicIps()
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var list in new[] { PublicIpHttpProxy, PublicIpHttpDirect })
+                if (list != null)
+                    foreach (var r in list)
+                        if (r.Ok && r.Ip != PublicIpProbe.ParseFailed) set.Add(r.Ip);
+            if (!string.IsNullOrWhiteSpace(PublicIpDirect) && PublicIpDirect != StunAndNat.Unavailable)
+                set.Add(PublicIpDirect!);
+            return set.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        }
 }

@@ -3,7 +3,7 @@ using NetCheck.Core;
 namespace NetCheck.Ui;
 
 /// <summary>
-/// 演示数据。仅在设置环境变量 NETCHECK_DEMO=1 时载入，用于界面预览与离屏截图，
+/// 演示数据。仅在设置环境变量 NETCHECK_UI_DEMO=1 时载入，用于界面预览与离屏截图，
 /// 正常运行时不会被执行。数据取自一次真实的校园网实测，便于评估界面在满数据下的排版。
 /// </summary>
 public static class SampleState

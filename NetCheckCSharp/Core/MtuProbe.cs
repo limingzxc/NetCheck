@@ -36,8 +36,11 @@ public static class MtuProbe
 
         report.Reachable = true;
 
-        // 二分查找最大可通过负载
-        int lo = 64, hi = 9000;                    // 上限放宽以支持巨型帧
+        // 二分查找最大可通过负载。
+        // 9000 只是搜索上界，不是承诺：超过本机 MTU 的负载会在本机协议栈就因为
+        // DF 失败，所以实际能探到的路径 MTU 不会超过本机 MTU —— 那也正是
+        // 用户该看到的答案（他能用的就是以本机 MTU 为上限）。
+        int lo = 64, hi = 9000;
         int best = 64;
         var tested = new List<(int Size, bool Ok)>();
 
