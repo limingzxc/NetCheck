@@ -11,23 +11,35 @@ namespace NetCheck.Ui;
 public static class Renderer
 {
     // ---- 调色板（浅色主题）----
-    // 数值与 App.xaml 里的同名画刷保持一致（那边是唯一权威，改色两边一起改）：
-    // Muted 承载所有需要阅读的次级文字，在白底 / SoftBg 底上都过 WCAG AA；
-    // Faint 只用于装饰（断开状态的圆点），不再承载需要阅读的文字。
-    private static readonly SolidColorBrush Ink = New(0x1F, 0x23, 0x28);
-    private static readonly SolidColorBrush Muted = New(0x66, 0x70, 0x80);
-    private static readonly SolidColorBrush Faint = New(0x9A, 0xA1, 0xAB);
-    private static readonly SolidColorBrush Line = New(0xE3, 0xE6, 0xEB);
-    private static readonly SolidColorBrush CardBg = New(0xFF, 0xFF, 0xFF);
-    private static readonly SolidColorBrush SoftBg = New(0xF4, 0xF6, 0xF9);
-    private static readonly SolidColorBrush Accent = New(0x2F, 0x6F, 0xD0);
-    private static readonly SolidColorBrush Good = New(0x1D, 0x7A, 0x4D);
-    private static readonly SolidColorBrush Warn = New(0xB3, 0x54, 0x1E);
-    private static readonly SolidColorBrush Bad = New(0xC0, 0x39, 0x2B);
-    private static readonly SolidColorBrush GoodBg = New(0xEA, 0xF6, 0xEF);
-    private static readonly SolidColorBrush WarnBg = New(0xFD, 0xF2, 0xE8);
-    private static readonly SolidColorBrush BadBg = New(0xFC, 0xEB, 0xE9);
-    private static readonly SolidColorBrush AccentBg = New(0xEC, 0xF2, 0xFC);
+    // **App.xaml 是唯一权威**：这里只按资源键取用，不再保留第二份数值。
+    // 曾经两边各写一套且悄悄漂移过 —— Faint（#9AA1AB vs #A8AEB8）、
+    // Line（#E3E6EB vs #DCDFE4）、SoftBg（#F4F6F9 vs #EEF1F6）三处对不上，
+    // 改色只改一半，界面从此有两种灰、两种边线。2026-10-12 整改为单向引用。
+    //
+    // 语义说明见 App.xaml 各键上的注释：Muted 承载所有需要阅读的次级文字，
+    // 在白底 / SoftBg 底上都过 WCAG AA；Faint 只用于装饰（断开状态的圆点）。
+    //
+    // 取不到资源时退回与 App.xaml 当前值一致的兜底色 —— Renderer 可能在
+    // 没有 Application 的上下文里被构造（例如离屏渲染、界面之外的调用），
+    // 那时宁可颜色不变也不能抛异常。兜底值全项目仅此一处，改 App.xaml 时连带修改。
+    private static SolidColorBrush Res(string key, byte r, byte g, byte b)
+        => Application.Current?.TryFindResource(key) as SolidColorBrush
+           ?? New(r, g, b);
+
+    private static readonly SolidColorBrush Ink      = Res("TextBrush",     0x1F, 0x23, 0x28);
+    private static readonly SolidColorBrush Muted    = Res("MutedBrush",    0x66, 0x70, 0x80);
+    private static readonly SolidColorBrush Faint    = Res("FaintBrush",    0xA8, 0xAE, 0xB8);
+    private static readonly SolidColorBrush Line     = Res("LineBrush",     0xDC, 0xDF, 0xE4);
+    private static readonly SolidColorBrush CardBg   = Res("CardBrush",     0xFF, 0xFF, 0xFF);
+    private static readonly SolidColorBrush SoftBg   = Res("SoftBrush",     0xEE, 0xF1, 0xF6);
+    private static readonly SolidColorBrush Accent   = Res("AccentBrush",   0x2F, 0x6F, 0xD0);
+    private static readonly SolidColorBrush Good     = Res("OkBrush",       0x1D, 0x7A, 0x4D);
+    private static readonly SolidColorBrush Warn     = Res("WarnBrush",     0xB3, 0x54, 0x1E);
+    private static readonly SolidColorBrush Bad      = Res("DangerBrush",   0xC0, 0x39, 0x2B);
+    private static readonly SolidColorBrush GoodBg   = Res("OkBgBrush",     0xEA, 0xF6, 0xEF);
+    private static readonly SolidColorBrush WarnBg   = Res("WarnBgBrush",   0xFD, 0xF2, 0xE8);
+    private static readonly SolidColorBrush BadBg    = Res("DangerBgBrush", 0xFC, 0xEB, 0xE9);
+    private static readonly SolidColorBrush AccentBg = Res("AccentBgBrush", 0xEC, 0xF2, 0xFC);
 
     private const string UiFont = "Microsoft YaHei UI";
     private const string MonoFont = "Consolas, Microsoft YaHei UI";

@@ -9,6 +9,7 @@
     <SolidColorBrush x:Key="CardBrush"    Color="#FFFFFF"/>
     <SolidColorBrush x:Key="AccentBrush"  Color="#2F6FD0"/>
     <SolidColorBrush x:Key="AccentHover"  Color="#255CB0"/>
+    <SolidColorBrush x:Key="AccentBgBrush" Color="#ECF2FC"/>
     <SolidColorBrush x:Key="SoftBrush"    Color="#EEF1F6"/>
     <SolidColorBrush x:Key="SoftHover"    Color="#DFE5EF"/>
     <SolidColorBrush x:Key="SoftDisabled" Color="#F2F3F6"/>
@@ -26,6 +27,9 @@
     <SolidColorBrush x:Key="DangerBrush"  Color="#C0392B"/>
     <SolidColorBrush x:Key="DangerBgBrush" Color="#FCEBE9"/>
     <SolidColorBrush x:Key="OkBrush"      Color="#1D7A4D"/>
+    <!-- 与 OkBrush / WarnBrush / DangerBrush 配套的浅色底。Renderer 只按键取用，
+         不自己写数值 —— 两份数值漂移过（Faint / Line / SoftBg 三处对不上）。 -->
+    <SolidColorBrush x:Key="OkBgBrush"    Color="#EAF6EF"/>
     <SolidColorBrush x:Key="HeaderBrush"  Color="#2F6FD0"/>
 
     <!-- 分组标题：一行小字，整行可点。
