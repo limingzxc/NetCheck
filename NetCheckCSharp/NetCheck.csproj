@@ -12,8 +12,8 @@
     <RootNamespace>NetCheck</RootNamespace>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
-    <Version>2.6.0</Version>
-    <FileVersion>2.6.0.0</FileVersion>
+    <Version>2.6.1</Version>
+    <FileVersion>2.6.1.0</FileVersion>
     <AssemblyTitle>NetCheck 网络体检</AssemblyTitle>
     <Product>NetCheck</Product>
     <Company>NetCheck</Company>
