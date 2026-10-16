@@ -668,17 +668,6 @@ v2.7 做过两轮。第一轮只换了配色和圆角，信息架构、布局骨
   用黑色则两套主题都能用：浅色下 8% 的黑是干净灰影，深色下加深到 55%，
   而深色界面的层次本来就主要靠边线，投影只是补一点纵深。
 
-两个配套细节：
-
-- **动画不能动画颜色。** hover 过渡原本想用 `ColorAnimation`，但它的 `To`
-  只能写死一个 `Color` 值 —— 切到深色后动画目标还是浅色主题的旧色，一 hover 就闪回亮色。
-  改成「叠一层同色 `Border`、只动画它的 `Opacity`」：`Opacity` 与主题无关，
-  叠加层的画刷又是可变更的共享对象，两边都跟着主题走。
-- **投影颜色固定是黑，只调不透明度。** `DropShadowEffect.Color` 是普通属性不是画刷，
-  没法就地刷新 —— 写进主题色的话，切主题后已有卡片的投影会留着旧色。
-  用黑色则两套主题都能用：浅色下 8% 的黑是干净灰影，深色下加深到 55%，
-  而深色界面的层次本来就主要靠边线，投影只是补一点纵深。
-
 #### 统一对话框：取代 MessageBox
 
 原来所有提示都走系统 `MessageBox`，两个问题：它是操作系统画的，**不跟随应用主题** ——
@@ -764,14 +753,14 @@ UIA 推不出标题）、自定义 2px 主色焦点环替代 WPF 默认虚线框
 ### 检测选项（v2.2 新增，v2.3 改成卡片，v2.7 变成导航栏里独立的一项）
 
 以前的参数是写死的常量：端口固定 `22,80,443,3389,8080`、并发固定 64、超时固定 1500 ms、
-延迟固定 4 次。现在全部可以在最上面那张「检测选项」卡片里调，改完自动落盘。
-卡片折叠起来后，标题栏仍会显示一行当前配置摘要（`目标 223.5.5.5 · 常用服务（5 个端口）· 并发 64`）：
+延迟固定 4 次。现在全部可以在「检测选项」页里调，改完自动落盘；
+页头部的说明行会显示当前配置摘要（`目标 223.5.5.5 · 常用服务（5 个端口）· 并发 64`）：
 
 | 选项 | 范围 | 说明 |
 |---|---|---|
 | 目标主机 | — | 路由追踪 / MTU / 端口检测共用（回车 = 立即路由追踪） |
 | 网页目标 | — | HTTP / HTTPS 检测的自定义目标，留空就不测（回车 = 立即网页连通性检测）。只收纯 ASCII 域名，裸 IP 与非 ASCII 域名会被清空 |
-| 端口预设 | 10 组 | 默认目标（公共 DNS）/ 常用服务 / Web / 数据库 / 远程管理 / 邮件与文件共享 / 公网危险暴露 / 常见高危 20 个 / 1-1024 全量 / 自定义 |
+| 端口预设 | 10 组 | 默认目标（公共 DNS）/ 常用服务 / Web 服务 / 数据库 / 远程管理 / 邮件与文件共享 / 公网危险暴露 / 常见高危 20 个 / 1-1024 全量 / 自定义 |
 | 端口表达式 | — | 逗号 / 空格 / 分号分隔，支持 `8000-8010` 范围写法（回车 = 立即端口检测） |
 | 端口并发数 | 1 ~ 512 | 过高可能被防火墙判定为扫描 |
 | 端口超时 | 100 ~ 15000 ms | 内网可调小，跨公网建议 1500 以上 |
@@ -810,7 +799,7 @@ NetCheck.exe --check web --export web.json       # 只跑 DNS→TCP→TLS→HTTP
 NetCheck.exe --check web --web example.com/path --export web.json   # 追加一个自定义目标
 NetCheck.exe --check all --export full.json
 NetCheck.exe --host 8.8.8.8 --ports 53,443 --auto --export report.txt
-NetCheck.exe --tab path --ports 1-1024           # 滚动到「路径」卡片
+NetCheck.exe --tab path --ports 1-1024           # 直接打开「路径」页
 NetCheck.exe --tab web --ports 1-1024            # 键名写法，等价于 --tab 9
 ```
 
@@ -819,7 +808,7 @@ NetCheck.exe --tab web --ports 1-1024            # 键名写法，等价于 --ta
 | `--host <主机>` | 覆盖配置里的目标主机（路由 / MTU / 端口的探测对端，通常是 IP） |
 | `--web <域名>` | 覆盖配置里的网页目标，可带协议头与路径（`example.com` / `https://example.com/a`）。只收纯 ASCII 域名，裸 IP 与非 ASCII 域名会被拒绝 |
 | `--ports <表达式>` | 覆盖端口表达式，并自动反查对应的预设名 |
-| `--tab <键名 \| 0-9>` | 启动后滚动到某张卡片。推荐用键名：`options` / `overview` / `local` / `egress` / `link` / `dns` / `path` / `nat` / `port` / `ipv6` / `web`；数字写法按当前顺序 0~9 兼容保留 |
+| `--tab <键名 \| 0-9>` | 启动后直接打开某一项。推荐用键名：`options` / `overview` / `local` / `egress` / `link` / `dns` / `path` / `nat` / `port` / `ipv6` / `web`；数字写法按当前顺序 0~9 兼容保留 |
 | `--check <名称>` | `local` / `quick` / `egress` / `dns` / `latency` / `speed` / `ipv6` / `web` / `nat` / `trace` / `mtu` / `port` / `all` |
 | `--auto` | 等价于 `--check quick` |
 | `--theme <模式>` | `light` / `dark` / `system`。**只作用于本次运行，不写回配置** |
@@ -1146,7 +1135,7 @@ cd CoreTest
 dotnet run -- unit
 ```
 
-覆盖 1260 条断言：
+覆盖 1254 条断言：
 
 | 分组 | 覆盖内容 |
 |---|---|
@@ -1456,7 +1445,7 @@ NetCheckCSharp/
 
 CoreTest/                         测试工程，直接引用 Core/** 与 Ui 里五个纯逻辑文件
   CoreTest.csproj
-  Tests.cs                        1260 条单元断言（自带极简断言器，不依赖 NuGet）
+  Tests.cs                        1254 条单元断言（自带极简断言器，不依赖 NuGet）
   Program.cs                      unit / verifyjson / 真实网络检测三种模式
 
 e2e.ps1                           图形界面端到端集成测试（命令行 + 导出 + 配置持久化）
@@ -1464,7 +1453,7 @@ shots/capture.ps1                 按分类逐页离屏截图（PrintWindow）
 shots/v23/                        卡片布局截图（常规 / 收起全部 / 宽窗口居中）
 shots/v23b/                       v2.4 七张卡片的离屏截图（含概览角标与可点击问题清单）
 shots/v25_ipv6/                   v2.5 截图（IPv6 卡片、归属地、最小宽度下的排版）
-shots/v25_mask/  v25_layout/  v25_p0/    v2.5 早期几批截图（脱敏导出 / 布局 / P0 修复）
+shots/v25_mask/                   v2.5 早期截图（脱敏导出）
 shots/v27_review/                 v2.6 截图（分组重排、网页卡片、六张指标卡）
 shots/v32_redesign_light/         v2.7 第一轮（只换配色）浅色截图
 shots/v32_redesign_dark/          同上，深色
@@ -1473,6 +1462,10 @@ shots/v34_live_switch/            运行时切主题的三张图（切换前 / �
 shots/v41_nav_light/              v2.7 第二轮（侧边导航重构）浅色截图
 shots/v41_nav_dark/               同上，深色
 shots/v42_pages/                  选项页 / 端口页 / 最小窗口深色排版
+shots/v50_final_light/            定稿截图 · 浅色（概览 / 本机 / 出口 / DNS / 路径 / 端口）
+shots/v50_final_dark/             同上，深色
+shots/v51_final_check/            定稿复查 · 最小窗口（960×640）深色下的选项页
+shots/v70_polish/                 文案微调后的复查（概览 / 连通性 / 路径，浅 + 深）
 shots/theme_switch_test.ps1       验证运行时切换主题（按 Ctrl+T 后截图对比）
 shots/dialog_shot.ps1             截对话框（枚举进程的全部顶层窗口；--help 会弹出长文本对话框）
 shots/v60_dialog/                 两套主题下的对话框截图（长文本帮助框 / 双按钮确认框）
