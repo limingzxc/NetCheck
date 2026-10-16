@@ -709,7 +709,8 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 端口表达式下方的实时提示：解析结果 + 最坏耗时估算。
-    /// 顺带把同样的摘要写到「检测选项」卡片标题栏上，折叠起来也知道当前配置是什么。
+    /// 顺带把同样的摘要更新到「检测选项」页头部的说明行上，
+    /// 不选中选项页时也照样记着，切过去就是最新的。
     /// </summary>
     private void UpdatePortHint()
     {
@@ -1116,7 +1117,7 @@ public partial class MainWindow : Window
             Render();
 
             LblStatus.Text = quiet
-                ? "已自动读取本机网络配置 · 其余检测请点对应卡片上的按钮"
+                ? "已自动读取本机网络配置 · 其余检测请在左侧选中项目，再点右上方运行按钮"
                 : $"{label}：完成（用时 {sw.Elapsed.TotalSeconds:F1} 秒）";
         }
         catch (OperationCanceledException)

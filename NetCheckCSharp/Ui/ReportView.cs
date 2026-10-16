@@ -801,7 +801,7 @@ public static class ReportViewBuilder
                 Tone = Tone.Warn,
                 Title = $"路由追踪未到达目标（{tr.Hops.Count} 跳）",
                 Detail = "已达到最大跳数仍未到达 " + tr.Target + "。可能是目标屏蔽了 ICMP 应答，"
-                       + "也可能是后半段路径不通 —— 翻到「路径」卡片看最后一跳停在哪里。",
+                       + "也可能是后半段路径不通 —— 翻到「路径」页看最后一跳停在哪里。",
                 TargetTab = PathIndex,
             });
 

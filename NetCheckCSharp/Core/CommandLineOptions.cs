@@ -196,11 +196,11 @@ public sealed class CommandLineOptions
           --web <域名>      设置「网页目标」（HTTP/HTTPS 检测用），可带协议与路径：
                               example.com / https://example.com/a
           --ports <表达式>  设置端口表达式，如 22,80,443,8000-8010
-          --tab <键名>      启动后直接滚动到某张卡片。**推荐用卡片键名**，它不随卡片顺序变化：
-                              overview 概览   local 本机配置  egress 公网出口
-                              link     连通性  dns   DNS        path   路径
-                              nat      NAT     port  端口       ipv6   IPv4/IPv6
-                              web      HTTP/HTTPS
+          --tab <键名>      启动后直接打开某一项。**推荐用键名**，它不随各项顺序变化：
+                              overview 概览      local  本机配置   egress 公网出口
+                              link     连通性    dns    DNS        path   路径
+                              nat      NAT       port   端口       ipv6   IPv4/IPv6
+                              web      HTTP/HTTPS                    options 检测选项
                             数字写法仍然支持，但含义按当前顺序：
                               0 概览  1 本机  2 出口  3 连通性  4 DNS
                               5 路径  6 NAT   7 端口  8 IPv6    9 网页
