@@ -420,8 +420,8 @@ Section "4. 界面关闭时把检测选项与窗口几何写进配置"
 # 真正删掉配置文件来模拟「首次运行」。必须用 [System.IO.File]::Delete ——
 # Remove-Item / rm 会被环境的安全策略拦下来。
 # 这一步不能偷懒写成 "{}"：文件「不存在」和「存在但内容为空」对界面是两回事 ——
-# 只有前者才算首次运行，界面会据此把「高级」组默认收起来；
-# 后者属于「老用户的配置里没有这些键」，必须保持展开，不打扰。
+# 前者是全新用户，后者是老用户升级上来的（配置里没有新字段），
+# 两者的默认落点、窗口尺寸都可能不一样，混起来就测不出问题。
 $settingsDir = Split-Path -Parent $settingsPath
 if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
 if ([System.IO.File]::Exists($settingsPath)) { [System.IO.File]::Delete($settingsPath) }
@@ -466,21 +466,9 @@ if ($h -ne [IntPtr]::Zero) {
             Check ([math]::Abs([int]$cfg.WindowWidth - 1010) -le 8) "记录了调整后的窗口宽度" ("实际 " + $cfg.WindowWidth)
             Check ([math]::Abs([int]$cfg.WindowHeight - 700) -le 8) "记录了调整后的窗口高度" ("实际 " + $cfg.WindowHeight)
 
-            # 首次运行的默认折叠状态 = 「检测选项」+「高级」组全部卡片。用 --tab overview 启动，不会碰这些卡片，
-            # 所以关闭时它们应该原样收着；概览等常用组检测项一张都不能折。
-            # 逐项列出而不是只数个数：以后往高级组增删卡片时，漏掉的新卡片会被这条断言逮住。
-            # 检测选项默认折叠：展开要占约半屏，会把概览挤出首屏；标题栏仍有配置摘要。
-            $collapsedFirst = @($cfg.CollapsedCards)
-            $shownFirst = $collapsedFirst -join ","
-            $advanced = @("path", "nat", "port", "ipv6", "web")
-            $common = @("overview", "local", "egress", "link", "dns")
-            foreach ($k in @("options") + $advanced) {
-                Check ($collapsedFirst -contains $k) "首次运行折叠了「$k」" ("实际 " + $shownFirst)
-            }
-            foreach ($k in $common) {
-                Check (-not ($collapsedFirst -contains $k)) "首次运行不折叠常用组的「$k」" ("实际 " + $shownFirst)
-            }
-            Check ($collapsedFirst.Count -eq ($advanced.Count + 1)) "首次运行只折叠检测选项和高级组那 $($advanced.Count + 1) 张卡片" ("实际 " + $shownFirst)
+            # 首次运行停在「概览」。v2.7 起侧边导航取代了卡片折叠，
+            # 这条守的是「默认落点」—— 打开程序第一眼必须是有内容可看的那一项。
+            Check ($cfg.SelectedCard -eq "overview") "首次运行停在概览" ("实际 「" + $cfg.SelectedCard + "」")
             # 网页目标默认留空 —— 内置三个目标已经够回答「网页通不通」，
             # 替用户预设一个别人的网站更像广告位。
             Check ($cfg.WebTarget -eq "") "网页目标默认留空" ("实际 「" + $cfg.WebTarget + "」")
@@ -507,12 +495,14 @@ if (Test-Path $settingsPath) {
     $cfg.PortSpec = "1-1024"
     $cfg.PortPreset = "1-1024 全量"
     $cfg.PortConcurrency = 128
-    $cfg.CollapsedCards = @("options", "port", "path")
+    # 故意写一个不存在的检测项键：程序应该认出它无效、退回概览，并把回退写回配置。
+    # 这样既能验证「配置里的选中项确实被读了」（没读的话不会去判断它是否有效），
+    # 也守住了「坏配置不让程序起不来」。
+    $cfg.SelectedCard = "no-such-card"
     ($cfg | ConvertTo-Json -Depth 5) | Set-Content $settingsPath -Encoding UTF8
 
-    # 用 --tab path 而不是 --tab port：--tab 会滚动到目标卡片**并把它展开**
-    # （跳过去却只看到一行标题等于没跳），用端口会把下面要断言的「port 保持折叠」冲掉。
-    $p = Start-Process -FilePath $Exe -ArgumentList @("--tab", "path") -PassThru
+    # 不带 --tab 启动：这次要看的是配置本身被怎么处理
+    $p = Start-Process -FilePath $Exe -PassThru
     $h = [IntPtr]::Zero
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 250
@@ -529,9 +519,6 @@ if (Test-Path $settingsPath) {
         Check ([math]::Abs($w - 980) -le 6) "启动时还原了配置里的窗口宽度" ("实际 $w")
         Check ([math]::Abs($hh - 660) -le 6) "启动时还原了配置里的窗口高度" ("实际 $hh")
 
-        # 关闭时会把界面状态写回配置。如果程序压根没读 CollapsedCards，
-        # 这一步就会把它覆盖成空数组 —— 所以「关掉再读回来还是这两项」
-        # 等价于验证了折叠状态确实被读进界面、又原样写回去了。
         Start-Sleep -Seconds 3
         $p.CloseMainWindow() | Out-Null
         $p.WaitForExit(20000) | Out-Null
@@ -542,12 +529,8 @@ if (Test-Path $settingsPath) {
         try { $after = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
         Check ($after -ne $null) "关闭后配置仍可解析" ""
         if ($after -ne $null) {
-            $collapsed = @($after.CollapsedCards)
-            Check ($collapsed -contains "options") "折叠状态跨启动保留：检测选项" ("实际 " + ($collapsed -join ","))
-            Check ($collapsed -contains "port") "折叠状态跨启动保留：端口" ("实际 " + ($collapsed -join ","))
-            # --tab path 指向「路径」卡片，它应该被展开（跳转 = 展开目标卡片）
-            Check (-not ($collapsed -contains "path")) "命令行 --tab 会展开目标卡片" ("实际 " + ($collapsed -join ","))
-            Check ($collapsed.Count -eq 2) "折叠状态没有被多写或少写" ("实际 " + $collapsed.Count)
+            Check ($after.SelectedCard -eq "overview") "配置里无效的选中项被自愈成概览" ("实际 「" + $after.SelectedCard + "」")
+            Check ($after.PortSpec -eq "1-1024") "选中的检测项之外，其余配置原样保留" ("实际 「" + $after.PortSpec + "」")
         }
     } else {
         Bad "启动时还原窗口尺寸" "拿不到窗口句柄"

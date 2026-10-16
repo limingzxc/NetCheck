@@ -5,7 +5,15 @@ param(
     [int]$Height = 0,
     [int]$Width = 1080,
     [string]$Suffix = "",
-    [switch]$NoDemo
+    [switch]$NoDemo,
+    # 传给程序的额外参数，比如 @("--help") 用来截「命令行参数」对话框。
+    # 走命令行而不是改 settings.json：不会污染用户真实的偏好。
+    [string[]]$ExtraArgs = @(),
+    # 这套图第几张时先按一次回车（有些对话框要点一下才继续，留个口子）。
+    [switch]$SendEnter,
+    # 传给程序的 --theme，空串表示用配置文件里的偏好。
+    # 走命令行而不是改 settings.json：不会污染用户真实的主题偏好。
+    [string]$Theme = ""
 )
 
 Add-Type -AssemblyName System.Drawing
@@ -37,7 +45,18 @@ foreach ($t in $Tabs) {
     if ($NoDemo) { $env:NETCHECK_UI_DEMO = "0" } else { $env:NETCHECK_UI_DEMO = "1" }
     $env:NETCHECK_UI_DEMO_TAB = "$t"
 
-    $proc = Start-Process -FilePath $Exe -PassThru
+    # 参数列表：先 --theme，再调用方给的额外参数。
+    # 用 `+=` 累加而不是 `+` 拼接数组 —— PowerShell 5 里 `@() + $(...)` 这种
+    # 「把数组塞进子表达式再加」是不支持的，会报 op_Addition 找不到。
+    $appArgs = @()
+    if ($Theme) { $appArgs += "--theme"; $appArgs += $Theme }
+    $appArgs += $ExtraArgs
+
+    $proc = if ($appArgs.Count -gt 0) {
+        Start-Process -FilePath $Exe -PassThru -ArgumentList $appArgs
+    } else {
+        Start-Process -FilePath $Exe -PassThru
+    }
 
     # 等窗口句柄就绪
     $h = [IntPtr]::Zero
@@ -57,6 +76,12 @@ foreach ($t in $Tabs) {
     [WinApi2]::ShowWindow($h, 5) | Out-Null
     [WinApi2]::SetForegroundWindow($h) | Out-Null
     Start-Sleep -Milliseconds 1200
+
+    if ($SendEnter) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+        Start-Sleep -Milliseconds 800
+    }
 
     if ($Height -gt 0) {
         [WinApi2]::MoveWindow($h, 40, 20, $Width, $Height, $true) | Out-Null

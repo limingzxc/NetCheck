@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Net;
+using System.Net.Sockets;
 using NetCheck.Core;
 using NetCheck.Ui;
 
@@ -88,6 +90,7 @@ internal static class Tests
         WebReportChecks();
         WebView();
         DnsCompareView();
+        DnsProbeLoopback();
         HijackVerdict();
         TextReport();
     }
@@ -454,7 +457,7 @@ internal static class Tests
         T.Eq(d.PortSpec, "53,80,443", "默认端口表达式与默认目标配套");
         T.Eq(d.PortPreset, PortPresets.DefaultName, "默认预设名取自 PortPresets.DefaultName");
         T.Eq(d.TargetHost, "223.5.5.5", "默认目标主机");
-        T.Eq(d.CollapsedCards.Length, 0, "默认没有折叠任何卡片");
+        T.Eq(d.SelectedCard, "overview", "默认停在概览");
         T.False(d.WindowMaximized, "默认不最大化");
 
         // ---- 越界收敛 ----
@@ -473,19 +476,17 @@ internal static class Tests
         T.Eq(new AppSettings { SpeedSeconds = 9999 }.Clamp().SpeedSeconds, 60, "测速时长上限 60");
         T.Eq(new AppSettings { DnsTimeoutMs = 1 }.Clamp().DnsTimeoutMs, 300, "DNS 超时下限 300");
         T.Eq(new AppSettings { DnsTimeoutMs = 99999 }.Clamp().DnsTimeoutMs, 10000, "DNS 超时上限 10000");
-        // 折叠卡片列表是手改配置文件时最容易写坏的字段，收敛规则要逐条盯住
-        T.Eq(new AppSettings { CollapsedCards = null! }.Clamp().CollapsedCards.Length, 0,
-            "折叠列表为 null 时收敛成空数组");
-        T.Eq(new AppSettings { CollapsedCards = new[] { "port", "port", "dns" } }.Clamp().CollapsedCards.Length, 2,
-            "折叠列表去重");
-        T.Eq(new AppSettings { CollapsedCards = new[] { "port", "", "   " } }.Clamp().CollapsedCards.Length, 1,
-            "折叠列表丢掉空白项");
-        T.Eq(new AppSettings { CollapsedCards = new[] { "  port  " } }.Clamp().CollapsedCards[0], "port",
-            "折叠项两侧空白被裁掉");
-        T.Eq(new AppSettings { CollapsedCards = new[] { "PORT", "port" } }.Clamp().CollapsedCards.Length, 1,
-            "折叠列表去重忽略大小写");
-        T.Eq(new AppSettings { CollapsedCards = new[] { "dns", "port" } }.Clamp().CollapsedCards[0], "dns",
-            "折叠列表保持原有顺序");
+        // 「选中的检测项」是手改配置文件时最容易写坏的字段，收敛规则要逐条盯住
+        T.Eq(new AppSettings { SelectedCard = null! }.Clamp().SelectedCard, "overview",
+            "选中项为 null 时回退概览");
+        T.Eq(new AppSettings { SelectedCard = "   " }.Clamp().SelectedCard, "overview",
+            "选中项为空白时回退概览");
+        T.Eq(new AppSettings { SelectedCard = "  PORT  " }.Clamp().SelectedCard, "port",
+            "选中项两侧空白被裁掉并转小写");
+        // 认不出来的键名刻意保留原样：校验「这个键存不存在」要问 CardCatalog，
+        // 而它在 Ui 层、Core 不该反过来依赖它。界面找不到时会回退概览。
+        T.Eq(new AppSettings { SelectedCard = "not-a-card" }.Clamp().SelectedCard, "not-a-card",
+            "认不出来的选中项原样保留（由界面回退）");
         T.Eq(new AppSettings { WindowWidth = 100 }.Clamp().WindowWidth, 940, "窗口宽度下限 940");
         T.Eq(new AppSettings { WindowWidth = 99999 }.Clamp().WindowWidth, 4000, "窗口宽度上限 4000");
         // 下限必须和 MainWindow.xaml 的 MinHeight 一致（620）。
@@ -526,7 +527,7 @@ internal static class Tests
                 TraceTimeoutMs = 900,
                 SpeedSeconds = 25,
                 DnsTimeoutMs = 800,
-                CollapsedCards = new[] { "options", "port" },
+                SelectedCard = "dns",
                 WindowWidth = 1500,
                 WindowHeight = 950,
                 WindowMaximized = true,
@@ -545,8 +546,7 @@ internal static class Tests
             T.Eq(back.TraceTimeoutMs, 900, "往返：追踪超时");
             T.Eq(back.SpeedSeconds, 25, "往返：测速时长");
             T.Eq(back.DnsTimeoutMs, 800, "往返：DNS 超时");
-            T.Eq(back.CollapsedCards.Length, 2, "往返：折叠卡片数量");
-            T.True(back.CollapsedCards.Contains("port"), "往返：折叠卡片内容");
+            T.Eq(back.SelectedCard, "dns", "往返：选中的检测项");
             T.Eq(back.WindowWidth, 1500, "往返：窗口宽度");
             T.Eq(back.WindowHeight, 950, "往返：窗口高度");
             T.True(back.WindowMaximized, "往返：最大化状态");
@@ -578,23 +578,13 @@ internal static class Tests
             T.Eq(AppSettings.Load(Path.Combine(dir, "nope.json")).PortTimeoutMs, 1500,
                   "文件不存在时默认值正确");
 
-            // ---- 首次运行标志：只有「文件根本不存在」才算首次运行 ----
-            // 界面靠它决定要不要把「高级」组默认收起来。判宽了会覆盖老用户的折叠偏好。
-            T.True(AppSettings.Load(Path.Combine(dir, "nope.json")).FirstRun,
-                   "文件不存在时 FirstRun = true");
-            T.Eq(AppSettings.Load(Path.Combine(dir, "nope.json")).CollapsedCards.Length, 0,
-                   "首次运行本身不带折叠状态（默认收起由界面按分组推导）");
-
-            T.False(AppSettings.Load(file).FirstRun, "文件存在时 FirstRun = false");
-
-            File.WriteAllText(file, "{ 坏掉了");
-            T.False(AppSettings.Load(file).FirstRun,
-                    "文件损坏不算首次运行 —— 不能趁机覆盖用户的折叠偏好");
-
-            var freshPath = Path.Combine(dir, "fresh.json");
-            new AppSettings().Save(freshPath);
-            T.False(File.ReadAllText(freshPath).Contains("FirstRun"),
-                    "FirstRun 不落盘（它是运行期标志，不是用户设置）");
+            // ---- 老配置里的 CollapsedCards 不该让读取失败 ----
+            // v2.7 用「选中的检测项」取代了折叠，老配置里的 CollapsedCards 会被忽略。
+            // 这条守的是「升级不炸」：反序列化遇到不认识的字段必须安静跳过。
+            File.WriteAllText(file, "{\"CollapsedCards\": [\"options\", \"port\"], \"TargetHost\": \"9.9.9.9\"}");
+            var migrated = AppSettings.Load(file);
+            T.Eq(migrated.TargetHost, "9.9.9.9", "老配置里的已知字段照常读出来");
+            T.Eq(migrated.SelectedCard, "overview", "老配置没有 SelectedCard 时落在概览");
 
             // 保存到不存在的目录应该自动创建
             var deep = Path.Combine(dir, "a", "b", "c.json");
@@ -3127,6 +3117,77 @@ internal static class Tests
                "对比列表里全是公网地址 —— 私有地址的耗时不代表解析能力");
         T.True(Thresholds.DnsSwitchGainMs > 0 && Thresholds.DnsSwitchGainRatio > 1,
                "「值得换」的两个判据都要是正数，倍数要大于 1");
+    }
+
+    // ==================================================================
+    // DNS 探测的收发路径（回环）
+    // ==================================================================
+
+    /// <summary>
+    /// 回归测试：DNS 探测必须能在「Connect 到服务器端点，再用不带端点的重载发包」
+    /// 这条路径上收发包。
+    ///
+    /// 背景：v2.6.1 发布版出现「所有公共 DNS 都没有响应」。根因是 DnsProbe 在
+    /// <c>udp.Connect(server, 53)</c> 之后仍然调用 <c>SendAsync(query, len, host, port)</c>——
+    /// 这个重载走 Socket.SendTo，而已连接的 socket 不允许指定目标，直接抛
+    /// 「Cannot send packets to an arbitrary host」。四台服务器全部命中同一个异常，
+    /// 界面上看起来像整个网络断了。
+    ///
+    /// 用 127.0.0.1 上自建的应答器来验：只走回环，不依赖外网、不受 DNS 环境影响，
+    /// 也不会拖慢测试（应答器收到包就立刻回，正常路径毫秒级完成）。
+    /// </summary>
+    private static void DnsProbeLoopback()
+    {
+        T.Group("DnsProbe 收发（回环）");
+
+        using var fakeDns = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        int port = ((IPEndPoint)fakeDns.Client.LocalEndPoint!).Port;
+
+        // 收到一条查询就照原样回一条带 A 记录的应答（事务 ID 抄回去，否则会被判成不匹配）
+        string responderError = "";
+        var responder = Task.Run(async () =>
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(5000);
+                var req = await fakeDns.ReceiveAsync(cts.Token);
+                var reply = BuildFakeAResponse(req.Buffer, "203.0.113.7");
+                await fakeDns.SendAsync(reply, reply.Length, req.RemoteEndPoint);
+            }
+            catch (Exception ex) { responderError = ex.GetType().Name; }
+        });
+
+        var r = DnsProbe.TestServerAsync("127.0.0.1", "example.com", 3000,
+                                         CancellationToken.None, port)
+                         .GetAwaiter().GetResult();
+
+        T.True(r.Ok, "回环 DNS 应答应判成成功"
+                     + (r.Error.Length > 0 ? $"（实际报错：{r.Error}）" : ""));
+        T.Eq(r.Answers, 1, "应答里的 A 记录要被解析出来");
+        T.True(r.Ms >= 0, "应记录到耗时");
+
+        T.True(responder.Wait(6000), "回环应答器应在超时前结束");
+        T.Eq(responderError, "", "回环应答器不应报错");
+    }
+
+    /// <summary>
+    /// 造一条最小的 DNS 应答：抄回查询的事务 ID，把 QR 置 1、ANCOUNT 置 1，
+    /// 再挂一条指向查询 QNAME 的 A 记录。
+    /// </summary>
+    private static byte[] BuildFakeAResponse(byte[] query, string ip)
+    {
+        var resp = new List<byte>(query);
+        resp[2] = 0x81;                                    // QR=1, RD=1
+        resp[3] = 0x80;                                    // RA=1, RCODE=0
+        resp[6] = 0x00; resp[7] = 0x01;                    // ANCOUNT = 1
+
+        resp.AddRange(new byte[] { 0xC0, 0x0C });          // 名字指针 → 查询里的 QNAME
+        resp.AddRange(new byte[] { 0x00, 0x01 });          // TYPE  = A
+        resp.AddRange(new byte[] { 0x00, 0x01 });          // CLASS = IN
+        resp.AddRange(new byte[] { 0x00, 0x00, 0x00, 0x3C }); // TTL = 60
+        resp.AddRange(new byte[] { 0x00, 0x04 });          // RDLENGTH = 4
+        resp.AddRange(IPAddress.Parse(ip).GetAddressBytes());
+        return resp.ToArray();
     }
 
     // ==================================================================

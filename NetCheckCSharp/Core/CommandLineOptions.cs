@@ -43,12 +43,15 @@ public sealed class CommandLineOptions
     public bool Auto { get; private set; }
     public string? Check { get; private set; }
     public string? ExportPath { get; private set; }
+    /// <summary><c>--theme light|dark|system</c>：本次运行用的主题，覆盖配置文件（不写回）。</summary>
+    public string? Theme { get; private set; }
     public bool ShowHelp { get; private set; }
 
     public List<string> Errors { get; } = new();
 
     public bool HasAny => Host != null || Ports != null || Tab != null || Auto
-                       || Check != null || ExportPath != null || WebTarget != null;
+                       || Check != null || ExportPath != null || WebTarget != null
+                       || Theme != null;
 
     /// <summary>启动后要自动执行的检测项；没有则返回 null。--auto 等价于 --check quick。</summary>
     public string? AutoCheckKey => Check ?? (Auto ? "quick" : null);
@@ -137,6 +140,13 @@ public sealed class CommandLineOptions
                     o.Auto = true;
                     break;
 
+                case "--theme":
+                    var th = Next().Trim().ToLowerInvariant();
+                    if (th is not ("light" or "dark" or "system"))
+                        o.Errors.Add($"--theme 只接受 light / dark / system，收到「{th}」");
+                    else o.Theme = th;
+                    break;
+
                 case "--check":
                     var c = Next().Trim().ToLowerInvariant();
                     if (c.Length == 0) o.Errors.Add("--check 缺少参数值");
@@ -165,6 +175,9 @@ public sealed class CommandLineOptions
     {
         if (Host != null) s.TargetHost = Host;
         if (WebTarget != null) s.WebTarget = WebTarget;
+        // --theme 刻意**不写回配置文件**：它是一次性的「这次用哪个主题」，
+        // 不该把用户在界面上选好的偏好覆盖掉。所以这里改完，调用方保存配置时要么跳过、
+        // 要么在应用主题后把 s.Theme 恢复成配置里的原值 —— 见 App.OnStartup。
         if (Ports != null)
         {
             s.PortSpec = Ports;
@@ -201,6 +214,10 @@ public sealed class CommandLineOptions
                             quick   一键检测的快速预设（= local + egress + dns + latency）
                             all     全部 11 个原子检测项依次跑一遍（比 quick 更全、更慢）
           --auto            等价于 --check quick
+          --theme <模式>    本次运行使用的主题，不写回配置文件：
+                              light   浅色
+                              dark    深色
+                              system  跟随 Windows 的应用模式设置
           --export <路径>   检测完成后把结果导出到指定文件（.txt / .json）
                             配合 --check / --auto 使用时导出完就自动退出，
                             方便在脚本里无人值守地采集网络数据
@@ -211,5 +228,6 @@ public sealed class CommandLineOptions
           NetCheck.exe --check web --web https://example.com/a --export web.json
           NetCheck.exe --host 8.8.8.8 --ports 53,443 --auto --export report.txt
           NetCheck.exe --tab port --ports 1-1024
+          NetCheck.exe --theme dark --check dns
         """;
 }

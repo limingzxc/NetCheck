@@ -45,23 +45,27 @@ public sealed class AppSettings
 
     // ---- 界面 ----
     /// <summary>
-    /// 被收起的检测项卡片。存的是卡片键（options / overview / local / link / dns / nat / path / port），
-    /// 不是索引 —— 以后增删卡片时旧配置仍然认得出来，不会错位折叠到别的卡片上。
+    /// 上次停留在哪个检测项，存卡片键（overview / local / egress / link / dns / path / nat / port / ipv6 / web / options）。
+    ///
+    /// **存键而不是索引**：卡片增删时旧配置仍然认得出来，不会错位到别的检测项上。
+    ///
+    /// v2.7 之前这里存的是一个 <c>CollapsedCards</c> 数组（哪些卡片被折叠）。
+    /// 侧边导航取代了折叠 —— 一次只看一项，没有「折起来」这回事了。
+    /// 老配置里的 <c>CollapsedCards</c> 会被忽略（反序列化默认丢弃未知字段），
+    /// 这个新字段取默认值「概览」，也就是老用户升级后落在概览页，符合预期。
     /// </summary>
-    public string[] CollapsedCards { get; set; } = Array.Empty<string>();
+    public string SelectedCard { get; set; } = "overview";
 
     public int WindowWidth { get; set; } = 1180;
     public int WindowHeight { get; set; } = 880;
     public bool WindowMaximized { get; set; }
 
     /// <summary>
-    /// 本次 <see cref="Load"/> 是不是「首次运行」（配置文件根本不存在）。
-    /// 用来决定要不要写入默认折叠状态 —— 老用户的配置里没有高级组那几张卡片，
-    /// 不能因为升级就替他把卡片收起来。只在文件不存在时为 true；
-    /// 文件损坏走的是另一条分支（不设此标志），免得把一个坏文件当成首次运行。
+    /// 主题偏好："system"（跟随系统）/ "light" / "dark"。
+    /// 用字符串而不是枚举，是为了让配置文件被手改、或以后加新主题时都不会反序列化失败 ——
+    /// 认不出来的值一律回落到「跟随系统」。老配置里没有这个键，同样是这个默认值。
     /// </summary>
-    [JsonIgnore]
-    public bool FirstRun { get; private set; }
+    public string Theme { get; set; } = "system";
 
     // ------------------------------------------------------------------
 
@@ -95,18 +99,20 @@ public sealed class AppSettings
         SpeedSeconds = Math.Clamp(SpeedSeconds, 3, 60);
         DnsTimeoutMs = Math.Clamp(DnsTimeoutMs, 300, 10000);
 
-        // 手改配置文件时容易写出 null 或重复项，这里收敛成去重后的非空数组
-        CollapsedCards = (CollapsedCards ?? Array.Empty<string>())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        // 手改配置文件时容易写出 null 或空白，收敛成非空键名；认不出来的键留给界面处理
+        // （界面找不到对应卡片时会退回概览，这里不重复做那张表）。
+        SelectedCard = (SelectedCard ?? "").Trim().ToLowerInvariant();
+        if (SelectedCard.Length == 0) SelectedCard = "overview";
 
         WindowWidth = Math.Clamp(WindowWidth, 940, 4000);
         // 下限必须和 MainWindow.xaml 的 MinHeight 一致（620）。
         // 以前这里是 640、XAML 是 620：手改配置成 630 会被静默拉到 640，
         // 而用户明明能手动把窗口拉到 620，两边对不上。
         WindowHeight = Math.Clamp(WindowHeight, 620, 3000);
+
+        // 主题：手改配置写错、或以后版本删掉某个主题名时，收敛成「跟随系统」而不是留个野值
+        Theme = (Theme ?? "").Trim().ToLowerInvariant();
+        if (Theme != "light" && Theme != "dark") Theme = "system";
 
         return this;
     }
@@ -120,7 +126,7 @@ public sealed class AppSettings
         try
         {
             path ??= SettingsPath;
-            if (!File.Exists(path)) return new AppSettings { FirstRun = true };
+            if (!File.Exists(path)) return new AppSettings();
             var json = File.ReadAllText(path);
             var s = JsonSerializer.Deserialize<AppSettings>(json);
             return (s ?? new AppSettings()).Clamp();
@@ -128,7 +134,6 @@ public sealed class AppSettings
         catch
         {
             // 配置坏了不应该让程序起不来，退回默认值即可。
-            // 注意这里不设 FirstRun —— 文件是坏的，不是没有，不该趁机覆盖用户的折叠偏好。
             return new AppSettings();
         }
     }

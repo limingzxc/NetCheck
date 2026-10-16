@@ -134,6 +134,16 @@ public static class CardCatalog
     public static SectionDef[] CardsInGroup(string group)
         => All.Where(d => string.Equals(d.Group, group, StringComparison.Ordinal)).ToArray();
 
+    /// <summary>
+    /// 某个分组里的**检测项**卡片，不含「检测选项」这类非检测项。
+    ///
+    /// 为什么需要它：检测选项的 <c>Group</c> 写的是常用组（那只是让它在旧的分组逻辑里有归属），
+    /// 但它现在单独挂在导航栏的「配置」下 —— 不过滤掉就会在导航里出现两次。
+    /// 用 <c>TabIndex != NoTab</c> 判断而不是比键名，这样以后再加别的非检测项面板也不用改这里。
+    /// </summary>
+    public static SectionDef[] DetectionCardsInGroup(string group)
+        => All.Where(d => d.TabIndex != NoTab && string.Equals(d.Group, group, StringComparison.Ordinal)).ToArray();
+
     /// <summary>某个一级分组里的某个二级分组，按界面顺序。</summary>
     public static SectionDef[] CardsInSubGroup(string group, string subGroup)
         => All.Where(d => string.Equals(d.Group, group, StringComparison.Ordinal)

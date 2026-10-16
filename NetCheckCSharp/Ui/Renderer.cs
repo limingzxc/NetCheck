@@ -3,46 +3,57 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 
 namespace NetCheck.Ui;
 
 /// <summary>把 ReportView 渲染成 WPF 元素。全部在代码里构造，避免 XAML 里堆一堆 DataTemplate。</summary>
 public static class Renderer
 {
-    // ---- 调色板（浅色主题）----
-    // **App.xaml 是唯一权威**：这里只按资源键取用，不再保留第二份数值。
+    // ---- 调色板 ----
+    // **Ui/Theme.cs 的 Map 表是唯一权威**：这里只按资源键取用，不再保留第二份数值。
     // 曾经两边各写一套且悄悄漂移过 —— Faint（#9AA1AB vs #A8AEB8）、
     // Line（#E3E6EB vs #DCDFE4）、SoftBg（#F4F6F9 vs #EEF1F6）三处对不上，
     // 改色只改一半，界面从此有两种灰、两种边线。2026-10-12 整改为单向引用。
     //
-    // 语义说明见 App.xaml 各键上的注释：Muted 承载所有需要阅读的次级文字，
-    // 在白底 / SoftBg 底上都过 WCAG AA；Faint 只用于装饰（断开状态的圆点）。
-    //
-    // 取不到资源时退回与 App.xaml 当前值一致的兜底色 —— Renderer 可能在
+    // 取不到资源时退回与 Theme.cs 一致的兜底色 —— Renderer 可能在
     // 没有 Application 的上下文里被构造（例如离屏渲染、界面之外的调用），
-    // 那时宁可颜色不变也不能抛异常。兜底值全项目仅此一处，改 App.xaml 时连带修改。
+    // 那时宁可颜色不变也不能抛异常。兜底值全项目仅此一处，改 Theme.cs 时连带修改。
     private static SolidColorBrush Res(string key, byte r, byte g, byte b)
         => Application.Current?.TryFindResource(key) as SolidColorBrush
            ?? New(r, g, b);
 
-    private static readonly SolidColorBrush Ink      = Res("TextBrush",     0x1F, 0x23, 0x28);
-    private static readonly SolidColorBrush Muted    = Res("MutedBrush",    0x66, 0x70, 0x80);
-    private static readonly SolidColorBrush Faint    = Res("FaintBrush",    0xA8, 0xAE, 0xB8);
-    private static readonly SolidColorBrush Line     = Res("LineBrush",     0xDC, 0xDF, 0xE4);
-    private static readonly SolidColorBrush CardBg   = Res("CardBrush",     0xFF, 0xFF, 0xFF);
-    private static readonly SolidColorBrush SoftBg   = Res("SoftBrush",     0xEE, 0xF1, 0xF6);
-    private static readonly SolidColorBrush Accent   = Res("AccentBrush",   0x2F, 0x6F, 0xD0);
-    private static readonly SolidColorBrush Good     = Res("OkBrush",       0x1D, 0x7A, 0x4D);
-    private static readonly SolidColorBrush Warn     = Res("WarnBrush",     0xB3, 0x54, 0x1E);
-    private static readonly SolidColorBrush Bad      = Res("DangerBrush",   0xC0, 0x39, 0x2B);
-    private static readonly SolidColorBrush GoodBg   = Res("OkBgBrush",     0xEA, 0xF6, 0xEF);
-    private static readonly SolidColorBrush WarnBg   = Res("WarnBgBrush",   0xFD, 0xF2, 0xE8);
-    private static readonly SolidColorBrush BadBg    = Res("DangerBgBrush", 0xFC, 0xEB, 0xE9);
-    private static readonly SolidColorBrush AccentBg = Res("AccentBgBrush", 0xEC, 0xF2, 0xFC);
+    // 这些**不是缓存**：每次取用都重新向资源字典解析一次。
+    // 因为换主题时 Theme 会换掉字典里的画刷条目，缓存一份旧引用就会停在旧配色上。
+    // 取色时现场解析，配合「切换主题时重建当前详情面板」，所有元素都拿到的是新色。
+    private static SolidColorBrush Ink      => Res("TextBrush",     0x1B, 0x1F, 0x27);
+    private static SolidColorBrush Muted    => Res("MutedBrush",    0x5F, 0x68, 0x78);
+    private static SolidColorBrush Faint    => Res("FaintBrush",    0xA2, 0xA9, 0xB5);
+    private static SolidColorBrush Line     => Res("LineBrush",     0xE3, 0xE7, 0xEF);
+    private static SolidColorBrush CardBg   => Res("CardBrush",     0xFF, 0xFF, 0xFF);
+    private static SolidColorBrush PanelBg  => Res("PanelBrush",    0xF7, 0xF9, 0xFC);
+    private static SolidColorBrush CardHover => Res("CardHoverBrush", 0xFA, 0xFB, 0xFE);
+    private static SolidColorBrush SoftBg   => Res("SoftBrush",     0xEE, 0xF1, 0xF7);
+    private static SolidColorBrush Accent   => Res("AccentBrush",   0x2F, 0x63, 0xD6);
+    private static SolidColorBrush Good     => Res("OkBrush",       0x0F, 0x7A, 0x55);
+    private static SolidColorBrush Warn     => Res("WarnBrush",     0x9A, 0x56, 0x11);
+    private static SolidColorBrush Bad      => Res("DangerBrush",   0xBE, 0x3A, 0x2C);
+    private static SolidColorBrush GoodBg   => Res("OkBgBrush",     0xE7, 0xF6, 0xEF);
+    private static SolidColorBrush WarnBg   => Res("WarnBgBrush",   0xFC, 0xF1, 0xE4);
+    private static SolidColorBrush BadBg    => Res("DangerBgBrush", 0xFC, 0xEC, 0xEA);
+    private static SolidColorBrush AccentBg => Res("AccentBgBrush", 0xED, 0xF2, 0xFE);
+    /// <summary>铺在语义色实心块上的文字 / 图形（结论横幅的圆形标记）。</summary>
+    private static SolidColorBrush InverseText => Res("InverseTextBrush", 0xFF, 0xFF, 0xFF);
+    private static SolidColorBrush GoodBorder => Res("OkBorderBrush",     0xBF, 0xE3, 0xD0);
+    private static SolidColorBrush WarnBorder => Res("WarnBorderBrush",   0xEE, 0xD9, 0xBC);
+    private static SolidColorBrush BadBorder => Res("DangerBorderBrush", 0xF2, 0xCF, 0xCA);
 
     private const string UiFont = "Microsoft YaHei UI";
     private const string MonoFont = "Consolas, Microsoft YaHei UI";
+
+    // 「现代柔和」的圆角刻度：外层块 10、内部小块 9、胶囊 8。
+    private const double RadiusBlock = 10;
+    private const double RadiusInner = 9;
+    private const double RadiusChip = 8;
 
     private static SolidColorBrush New(byte r, byte g, byte b) => Freeze(new SolidColorBrush(Color.FromRgb(r, g, b)));
     private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
@@ -103,14 +114,125 @@ public static class Renderer
     }
 
     // ==================================================================
+    // 概览：结论横幅
+    // ==================================================================
+
+    /// <summary>
+    /// 概览页顶部的结论横幅。整个程序里唯一一处「先给结论、再给数据」的地方 ——
+    /// 打开就看到现在到底有没有问题，不用自己去读六张指标块和十几行表格。
+    ///
+    /// 底色跟着结论走（绿 / 橙 / 红 / 中性），这是刻意的：它是整页的视觉锚点，
+    /// 状态应该在第一眼就被感知到，而不是靠读一行小字。
+    /// </summary>
+    /// <param name="verdict">一句话结论，如「网络状态良好」。</param>
+    /// <param name="summary">关键指标摘要，如「公网出口 3 个 · 延迟 7.2 ms · 丢包 0.0%」。</param>
+    /// <param name="timestamp">检测时间。空串表示还没有数据。</param>
+    public static UIElement BuildHero(string verdict, Tone tone, string summary, string timestamp)
+    {
+        var fg = ToneBrush(tone);
+
+        var glyph = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse(tone switch
+            {
+                Tone.Good => "M4.5,9.5 L7.8,12.8 L14,5.5",
+                Tone.Warn => "M9.5,5 L9.5,11 M9.5,14 L9.5,14.2",
+                Tone.Bad => "M5.5,5.5 L13.5,13.5 M13.5,5.5 L5.5,13.5",
+                _ => "M5.5,9.5 L13.5,9.5",
+            }),
+            Stroke = InverseText,
+            StrokeThickness = 2,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var badge = new Border
+        {
+            Width = 44,
+            Height = 44,
+            CornerRadius = new CornerRadius(22),
+            Background = fg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 16, 0),
+            Child = glyph,
+        };
+
+        var title = Text(verdict, 20, fg, FontWeights.Bold);
+        var sub = new TextBlock
+        {
+            Text = summary,
+            FontSize = 12.5,
+            Foreground = Muted,
+            FontFamily = new FontFamily(UiFont),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+        var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        left.Children.Add(title);
+        if (summary.Length > 0) left.Children.Add(sub);
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(badge, 0);
+        Grid.SetColumn(left, 1);
+        grid.Children.Add(badge);
+        grid.Children.Add(left);
+
+        if (timestamp.Length > 0)
+        {
+            var ts = Text("检测时间 " + timestamp, 11.5, Muted);
+            ts.VerticalAlignment = VerticalAlignment.Top;
+            ts.Margin = new Thickness(20, 3, 0, 0);
+            Grid.SetColumn(ts, 2);
+            grid.Children.Add(ts);
+        }
+
+        return new Border
+        {
+            Background = ToneBg(tone),
+            BorderBrush = ToneBorder(tone),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(22, 20, 22, 20),
+            Margin = new Thickness(0, 0, 0, 16),
+            Child = grid,
+        };
+    }
+
+    /// <summary>
+    /// 结论横幅的描边。用主色本身当边线太重（整块会显得像警告框），
+    /// 所以只在语义色上取一点点 —— 中性态直接用常规边线。
+    /// </summary>
+    private static Brush ToneBorder(Tone t) => t switch
+    {
+        Tone.Good => GoodBorder,
+        Tone.Warn => WarnBorder,
+        Tone.Bad => BadBorder,
+        _ => Line,
+    };
+
+    // ==================================================================
     // 顶部指标卡片
     // ==================================================================
 
+    /// <summary>
+    /// 概览区的指标块。
+    ///
+    /// 层次是「浅灰页底 → 白色浮起块 → 浅灰内嵌块」三级：
+    /// 详情面板的底色是 BgBrush（浅灰），所以内容块用 CardBrush（白）才浮得起来。
+    /// 早先这里用 PanelBrush（也是浅灰），在浅灰页底上几乎看不出边界，整页糊成一片。
+    /// </summary>
     public static UIElement BuildCard(MetricCard c, Action<int> jump)
     {
         var title = Text(c.Title, 12, Muted);
-        var value = Text(c.Value, 21, c.HasData ? ToneBrush(c.Tone) : Muted, FontWeights.SemiBold);
-        value.Margin = new Thickness(0, 4, 0, 2);
+        var value = Text(c.Value, 24, c.HasData ? ToneBrush(c.Tone) : Muted, FontWeights.Bold);
+        value.Margin = new Thickness(0, 6, 0, 3);
         value.TextTrimming = TextTrimming.CharacterEllipsis;
         var sub = Text(c.Sub, 11.5, Muted);
         sub.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -125,23 +247,25 @@ public static class Renderer
             Background = CardBg,
             BorderBrush = Line,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(14, 11, 14, 12),
-            Margin = new Thickness(0, 0, 10, 0),
+            CornerRadius = new CornerRadius(RadiusBlock),
+            Padding = new Thickness(18, 15, 18, 16),
+            Margin = new Thickness(0, 0, 10, 10),
             Child = stack,
+            Effect = Elevation.Tile(),
         };
 
         if (c.HasData && c.TargetTab >= 0)
         {
             bd.Cursor = Cursors.Hand;
             bd.ToolTip = "点击查看详情";
-            bd.MouseEnter += (_, _) => bd.BorderBrush = Accent;
-            bd.MouseLeave += (_, _) => bd.BorderBrush = Line;
+            // 悬停：主色描边 + 面上浮一档。只换描边的话在浅色底上几乎看不见。
+            bd.MouseEnter += (_, _) => { bd.BorderBrush = Accent; bd.Background = CardHover; };
+            bd.MouseLeave += (_, _) => { bd.BorderBrush = Line; bd.Background = CardBg; };
             bd.MouseLeftButtonUp += (_, _) => jump(c.TargetTab);
         }
         else
         {
-            bd.Opacity = 0.72;
+            bd.Opacity = 0.75;
         }
         return bd;
     }
@@ -154,9 +278,9 @@ public static class Renderer
         => new Border
         {
             Background = ToneBg(c.Tone),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(10, 4, 10, 4),
-            Margin = new Thickness(0, 0, 8, 6),
+            CornerRadius = new CornerRadius(RadiusChip),
+            Padding = new Thickness(11, 5, 11, 5),
+            Margin = new Thickness(0, 0, 8, 8),
             Child = Text(c.Text, 11.5, ToneBrush(c.Tone), FontWeights.SemiBold),
         };
 
@@ -174,24 +298,25 @@ public static class Renderer
     /// </param>
     public static UIElement BuildTabBody(TabView t, Action<int> jump)
     {
-        var host = new StackPanel { Margin = new Thickness(0, 2, 6, 8) };
+        var host = new StackPanel { Margin = new Thickness(0, 2, 6, 0) };
 
         if (!t.HasData)
         {
             host.Children.Add(new Border
             {
+                // 和分区块一样用白面浮起，只是内容换成一句空状态说明
                 Background = CardBg,
                 BorderBrush = Line,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(20, 30, 20, 30),
+                CornerRadius = new CornerRadius(RadiusBlock),
+                Padding = new Thickness(20, 38, 20, 38),
                 Child = new StackPanel
                 {
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Children =
                     {
-                        Text("这个检测项还没有数据", 13, Muted),
-                        Text("点卡片标题栏右侧的按钮开始检测", 11.5, Muted),
+                        Text("这个检测项还没有数据", 13.5, Ink),
+                        Text("点右上角的按钮开始检测", 12, Muted),
                     },
                 },
             });
@@ -212,8 +337,17 @@ public static class Renderer
     {
         var body = new StackPanel();
 
-        // 标题行
-        var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+        // 标题行：小色标 + 标题 + 说明。色标让「这一段讲什么」在长卡片里能被扫到。
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 11) };
+        head.Children.Add(new Border
+        {
+            Width = 3,
+            Height = 13,
+            CornerRadius = new CornerRadius(2),
+            Background = sec.Verdict.Length > 0 ? ToneBrush(sec.VerdictTone) : Faint,
+            Margin = new Thickness(0, 0, 9, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
         head.Children.Add(Text(sec.Title, 13, Ink, FontWeights.SemiBold));
         if (sec.Hint.Length > 0)
         {
@@ -229,9 +363,9 @@ public static class Renderer
             body.Children.Add(new Border
             {
                 Background = ToneBg(sec.VerdictTone),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(12, 8, 12, 8),
-                Margin = new Thickness(0, 0, 0, 10),
+                CornerRadius = new CornerRadius(RadiusInner),
+                Padding = new Thickness(13, 9, 13, 9),
+                Margin = new Thickness(0, 0, 0, 11),
                 Child = new TextBlock
                 {
                     Text = sec.Verdict,
@@ -283,12 +417,14 @@ public static class Renderer
 
         return new Border
         {
+            // 白面浮在浅灰页底上（见 BuildCard 的层次说明）。
+            // 分区块不再自己加投影：一页里可能有三四块，层层投影会让整页发灰。
             Background = CardBg,
             BorderBrush = Line,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(16, 14, 16, 14),
-            Margin = new Thickness(0, 0, 0, 12),
+            CornerRadius = new CornerRadius(RadiusBlock),
+            Padding = new Thickness(18, 16, 18, 16),
+            Margin = new Thickness(0, 0, 0, 14),
             Child = body,
         };
     }
@@ -303,8 +439,8 @@ public static class Renderer
 
         foreach (var r in rows)
         {
-            var grid = new Grid { Margin = new Thickness(0, 0, 0, 5) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
+            var grid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
 
             bool hasNote = r.Note.Length > 0;
             if (hasNote)
@@ -357,7 +493,7 @@ public static class Renderer
 
         foreach (var r in rows)
         {
-            var grid = new Grid { Margin = new Thickness(0, 0, 0, 9) };
+            var grid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             // 230 而不是 140：DNS 服务器的名字就是 IP，右边还要跟一段归属地
             // （「114.114.114.114  江苏省南京市」实测要 197 px，200 刚好会把它截成「江苏省南京…」）。
             // 每行是各自独立的 Grid，Auto 列不会跨行对齐，所以只能给个够用的定宽。
@@ -371,19 +507,19 @@ public static class Renderer
             name.Margin = new Thickness(0, 0, 12, 0);
             Grid.SetColumn(name, 0);
 
-            // 轨道
+            // 轨道。用 SoftBg 而不是 Line：Line 太浅，在 PanelBg 分区块上几乎看不见槽。
             var track = new Grid { Width = BarRow.TrackWidth, HorizontalAlignment = HorizontalAlignment.Left };
             track.Children.Add(new Border
             {
-                Height = 9,
-                CornerRadius = new CornerRadius(4.5),
+                Height = 8,
+                CornerRadius = new CornerRadius(4),
                 Background = SoftBg,
             });
             track.Children.Add(new Border
             {
-                Height = 9,
+                Height = 8,
                 Width = r.BarWidth,
-                CornerRadius = new CornerRadius(4.5),
+                CornerRadius = new CornerRadius(4),
                 Background = ToneBrush(r.Tone),
                 HorizontalAlignment = HorizontalAlignment.Left,
             });
@@ -435,12 +571,12 @@ public static class Renderer
 
             var bd = new Border
             {
-                Width = 96,
-                Height = 54,
+                Width = 94,
+                Height = 56,
                 Background = ToneBg(c.Tone),
                 BorderBrush = c.Open ? fg : Line,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
+                CornerRadius = new CornerRadius(RadiusInner),
                 Margin = new Thickness(0, 0, 8, 8),
                 ToolTip = c.Tooltip,
                 Child = stack,
@@ -461,7 +597,7 @@ public static class Renderer
 
         foreach (var a in rows)
         {
-            var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 9) };
 
             var dot = new Border
             {
@@ -470,7 +606,7 @@ public static class Renderer
                 CornerRadius = new CornerRadius(4),
                 Background = a.IsUp ? Good : Faint,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 8, 0),
+                Margin = new Thickness(0, 0, 9, 0),
             };
             head.Children.Add(dot);
             head.Children.Add(Text(a.Name, 13, Ink, FontWeights.SemiBold));
@@ -478,8 +614,8 @@ public static class Renderer
             var badge = new Border
             {
                 Background = a.IsUp ? GoodBg : SoftBg,
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(7, 2, 7, 2),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 2, 8, 2),
                 Margin = new Thickness(10, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
                 Child = Text(a.Status, 11, a.IsUp ? Good : Muted, FontWeights.SemiBold),
@@ -489,7 +625,7 @@ public static class Renderer
             if (a.Type.Length > 0)
             {
                 var tp = Text(a.Type, 11, Muted);
-                tp.Margin = new Thickness(8, 1, 0, 0);
+                tp.Margin = new Thickness(9, 1, 0, 0);
                 head.Children.Add(tp);
             }
 
@@ -500,7 +636,7 @@ public static class Renderer
             {
                 var d = Text(a.Description, 11, Muted);
                 d.TextWrapping = TextWrapping.Wrap;
-                d.Margin = new Thickness(0, 0, 0, 8);
+                d.Margin = new Thickness(0, 0, 0, 9);
                 body.Children.Add(d);
             }
 
@@ -514,7 +650,7 @@ public static class Renderer
             AddPair(grid, 0, 3, "MAC", a.Mac.Length > 0 ? a.Mac : "—", Ink, MonoFont);
             body.Children.Add(grid);
 
-            var grid2 = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            var grid2 = new Grid { Margin = new Thickness(0, 5, 0, 0) };
             for (int i = 0; i < 3; i++)
                 grid2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             AddPair(grid2, 0, 0, "DNS", a.Dns, Ink, MonoFont);
@@ -522,13 +658,15 @@ public static class Renderer
             AddPair(grid2, 0, 2, "地址分配", a.Dhcp, Ink, MonoFont);
             body.Children.Add(grid2);
 
+            // 网卡块嵌在白色分区块里，所以这里反过来用浅灰内嵌面 ——
+            // 靠「白 / 灰交替」分层，不靠加重边线。
             panel.Children.Add(new Border
             {
-                Background = SoftBg,
+                Background = PanelBg,
                 BorderBrush = Line,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(7),
-                Padding = new Thickness(13, 11, 13, 11),
+                CornerRadius = new CornerRadius(RadiusInner),
+                Padding = new Thickness(14, 12, 14, 12),
                 Margin = new Thickness(0, 0, 0, 9),
                 Child = body,
             });
@@ -542,7 +680,7 @@ public static class Renderer
         stack.Children.Add(Text(key, 10.5, Muted));
         var v = Text(value, 12.5, valueBrush, font: font);
         v.TextTrimming = TextTrimming.CharacterEllipsis;
-        v.Margin = new Thickness(0, 1, 0, 0);
+        v.Margin = new Thickness(0, 2, 0, 0);
         stack.Children.Add(v);
         Grid.SetRow(stack, row);
         Grid.SetColumn(stack, col);
@@ -561,21 +699,56 @@ public static class Renderer
         {
             BorderBrush = Line,
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(0, 0, 0, 5),
-            Margin = new Thickness(0, 0, 0, 5),
+            Padding = new Thickness(0, 0, 0, 6),
+            Margin = new Thickness(0, 0, 0, 4),
             Child = HopLine("跳", "地址", "", "延迟", "状态", Muted, FontWeights.SemiBold),
         });
 
-        foreach (var h in rows)
-            panel.Children.Add(HopLine(h.Ttl, h.Address, h.Geo, h.MsText, h.Status, ToneBrush(h.Tone)));
+        // 隔行浅底。路由动辄二三十跳，纯靠行距扫很容易串行；
+        // 斑马纹比给每行加分隔线更轻，也不会把表格切得太碎。
+        //
+        // 状态列连着重复同样内容时，从第二行起淡化处理：一整页「中间跳」重复十来遍
+        // 会把「超时 / 无响应」这些真正该注意的行埋掉。淡化之后它们才跳得出来。
+        string prevStatus = "";
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var h = rows[i];
+            bool repeated = i > 0 && h.Status.Length > 0 && h.Status == prevStatus;
+            prevStatus = h.Status;
+
+            var line = HopLine(h.Ttl, h.Address, h.Geo, h.MsText, h.Status,
+                               ToneBrush(h.Tone), statusBrush: repeated ? Faint : ToneBrush(h.Tone));
+            if (i % 2 == 1)
+            {
+                panel.Children.Add(new Border
+                {
+                    Background = SoftBg,
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(7, 0, 7, 0),
+                    Margin = new Thickness(-7, 0, -7, 0),
+                    Child = line,
+                });
+            }
+            else
+            {
+                panel.Children.Add(new Border
+                {
+                    Padding = new Thickness(7, 0, 7, 0),
+                    Margin = new Thickness(-7, 0, -7, 0),
+                    Child = line,
+                });
+            }
+        }
 
         return panel;
     }
 
+    /// <param name="statusBrush">状态列单独用的颜色。重复状态会被淡化，见调用处。</param>
     private static UIElement HopLine(string ttl, string addr, string geo, string ms, string status,
-                                     Brush brush, FontWeight? weight = null)
+                                     Brush brush, FontWeight? weight = null,
+                                     Brush? statusBrush = null)
     {
-        var g = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+        var g = new Grid { Margin = new Thickness(0, 4, 0, 4) };
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
@@ -590,7 +763,7 @@ public static class Renderer
         t3.HorizontalAlignment = HorizontalAlignment.Right;
         t3.Margin = new Thickness(0, 0, 14, 0);
         Grid.SetColumn(t3, 2);
-        var t4 = Text(status, 12, brush, weight, MonoFont);
+        var t4 = Text(status, 12, statusBrush ?? brush, weight, MonoFont);
         Grid.SetColumn(t4, 3);
 
         g.Children.Add(t1);
@@ -613,19 +786,21 @@ public static class Renderer
     {
         var panel = new StackPanel();
 
-        foreach (var r in rows)
+        for (int i = 0; i < rows.Count; i++)
         {
-            var g = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+            var r = rows[i];
+
+            var g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var badge = new Border
             {
                 Background = ToneBg(r.Tone),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(7, 2, 7, 2),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 2, 8, 2),
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 1, 10, 0),
+                Margin = new Thickness(0, 1, 11, 0),
                 Child = Text(r.Level, 11, ToneBrush(r.Tone), FontWeights.SemiBold),
             };
             Grid.SetColumn(badge, 0);
@@ -663,15 +838,16 @@ public static class Renderer
             if (r.TargetTab >= 0 && r.TargetTab != ReportViewBuilder.OverviewIndex)
             {
                 int target = r.TargetTab;
-                g.Cursor = Cursors.Hand;
-                g.ToolTip = "点击查看这一项的详细数据";
-                // 用透明底色的 Border 包一层，鼠标悬停时整行有背景反馈
+                // 用透明底色的 Border 包一层，鼠标悬停时整行有背景反馈。
+                // 内缩 9px 让高亮块比问题文字略宽一圈，看起来像一张可点的卡片而不是一段文字。
                 var hover = new Border
                 {
                     Background = Brushes.Transparent,
-                    CornerRadius = new CornerRadius(6),
-                    Padding = new Thickness(8, 6, 8, 6),
-                    Margin = new Thickness(-8, 0, 0, 0),
+                    CornerRadius = new CornerRadius(RadiusChip),
+                    Padding = new Thickness(9, 7, 9, 7),
+                    Margin = new Thickness(-9, 0, 0, i == rows.Count - 1 ? 0 : 5),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "点击查看这一项的详细数据",
                     Child = g,
                 };
                 hover.MouseEnter += (_, _) => hover.Background = SoftBg;
@@ -681,7 +857,7 @@ public static class Renderer
             }
             else
             {
-                g.Margin = new Thickness(8, 0, 0, 12);
+                g.Margin = new Thickness(9, 0, 0, i == rows.Count - 1 ? 0 : 12);
                 panel.Children.Add(g);
             }
         }

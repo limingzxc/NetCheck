@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using Microsoft.Win32;
 using NetCheck.Core;
 using NetCheck.Ui;
@@ -37,21 +38,32 @@ public partial class MainWindow : Window
         public string Label = "";
     }
 
-    /// <summary>一张检测项卡片的可动部分。</summary>
+    /// <summary>
+    /// 一个检测项在界面上的全部可动部分。
+    ///
+    /// v2.7 起不再有「卡片外壳」这种东西：左侧导航栏里它是一项
+    /// （<see cref="NavItem"/> + 状态点 + 问题角标），右侧详情面板里是它的内容
+    /// （<see cref="BodyHost"/>）。运行按钮仍然只有一个入口 ——
+    /// 挂在详情面板头部（<see cref="ActionBar"/>），和它要填充的内容在一起。
+    /// </summary>
     private sealed class SectionCard
     {
         public string Key = "";
         public int TabIndex = -1;
-        public Border Root = null!;
-        public Border Header = null!;
-        public Border Body = null!;
-        public StackPanel BodyHost = null!;
-        public TextBlock HintText = null!;
+
+        // ---- 导航栏 ----
+        public RadioButton NavItem = null!;
+        /// <summary>状态点：绿=正常、橙=有提醒、红=有严重问题、灰=还没数据。</summary>
+        public Border NavDot = null!;
         public Border BadgeBox = null!;
         public TextBlock BadgeText = null!;
-        public TextBlock Chevron = null!;
+
+        // ---- 详情面板 ----
+        public StackPanel BodyHost = null!;
+        /// <summary>这个检测项的运行按钮组。切换检测项时挂到 DetailActions 上，切走时摘下。</summary>
+        public StackPanel ActionBar = null!;
+
         public readonly List<CardButton> Buttons = new();
-        public bool Collapsed;
     }
 
     // ==================================================================
@@ -73,27 +85,33 @@ public partial class MainWindow : Window
     /// <summary>有任何耗时操作在跑（检测或诊断包导出）。用来挡住并发触发 —— 光靠 _running 挡不住诊断包导出。</summary>
     private bool _busy;
 
-    /// <summary>最近一次渲染出来的视图模型。收起的卡片不重建内容，展开时要用它补渲染。</summary>
+    /// <summary>最近一次渲染出来的视图模型。只有当前选中的那一项会重建内容。</summary>
     private ReportView? _view;
 
     private readonly List<SectionCard> _cards = new();
     private readonly Dictionary<string, SectionCard> _cardByKey = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>分组键 -> 那一行分组标题（整行 + 右侧计数文案）。</summary>
-    private readonly Dictionary<string, (Button Root, TextBlock Right)> _groupHeaders = new(StringComparer.Ordinal);
-
-    /// <summary>分组键 -> 组内的卡片。分组标题的点击就是逐张调 SetCollapsed。</summary>
-    private readonly Dictionary<string, List<SectionCard>> _groupCards = new(StringComparer.Ordinal);
+    /// <summary>当前选中的检测项键。导航栏里同一时刻只有一项 IsChecked。</summary>
+    private string _selectedKey = "overview";
 
     private readonly Dictionary<string, (string Label, Func<IProgress<string>, DiagState, CancellationToken, Task> Run)> _tasks;
 
     public MainWindow()
     {
-        _settings = AppSettings.Load();
-        _cli = CommandLineOptions.Parse(Environment.GetCommandLineArgs().Skip(1));
-        _cli.ApplyTo(_settings);
+        // 复用 App 启动时读进来的那一份配置与命令行参数（见 App.Settings 的注释）。
+        // 只有脱离 App 单独构造窗口的场景（设计器预览、离屏渲染）才自己读一次。
+        bool standalone = Application.Current is not App;
+        _settings = standalone ? AppSettings.Load() : App.Settings;
+        _cli = standalone
+            ? CommandLineOptions.Parse(Environment.GetCommandLineArgs().Skip(1))
+            : App.Cli;
+        if (standalone) _cli.ApplyTo(_settings);
 
         InitializeComponent();
+
+        // 主题变化时，自绘的阴影颜色不会自动跟着走（DropShadowEffect 的 Color
+        // 是普通属性，不是画刷），这里订阅一次，把已有卡片的外壳阴影补上。
+        Theme.Changed += OnThemeChanged;
 
         _tasks = new Dictionary<string, (string, Func<IProgress<string>, DiagState, CancellationToken, Task>)>
         {
@@ -112,268 +130,290 @@ public partial class MainWindow : Window
         };
 
         CmbPreset.ItemsSource = PortPresets.Names;
-        BuildCards();
+        BuildNav();
         ApplySettingsToUi();
         RestoreWindowGeometry();
+        SyncThemeUi();
 
         Loaded += OnLoaded;
     }
 
     // ==================================================================
-    // 卡片构建
+    // 导航栏构建
     // ==================================================================
 
-    private void BuildCards()
+    /// <summary>
+    /// 生成左侧导航栏。层次和原来的卡片分组完全一致（常用 / 高级 → 网络路径 · 连接能力 · 协议），
+    /// 只是从「一行行分组标题 + 卡片」换成了「一列带缩进的导航项」。
+    /// </summary>
+    private void BuildNav()
     {
-        // 检测选项的输入控件声明在 XAML 里（保留 x:Name），这里把它从 StackPanel 里摘出来，
-        // 塞进和其他卡片一模一样的外壳，这样折叠行为、间距、圆角全都统一。
-        SectionHost.Children.Remove(OptionsFields);
+        // 检测选项的输入控件声明在 XAML 里（保留 x:Name），这里先摘出来，
+        // 选中「检测选项」时再挂回详情面板。
+        DetailHost.Children.Remove(OptionsFields);
         OptionsFields.Visibility = Visibility.Visible;
 
-        // 按分组铺卡片流：每组先放一行分组标题，再放组内的卡片。
-        // 高级组内部还有一层「二级分组」（网络路径 / 连接能力 / 协议），
-        // 常用组没有 —— SubGroupsOf 对常用组返回空数组，下面那段自然跳过。
         foreach (var (groupKey, groupTitle) in CardCatalog.Groups)
         {
-            var defs = CardCatalog.CardsInGroup(groupKey);
+            // DetectionCardsInGroup 而不是 CardsInGroup：把「检测选项」排掉，
+            // 它单独归到下面的「配置」里，否则会在导航栏出现两次。
+            var defs = CardCatalog.DetectionCardsInGroup(groupKey);
             if (defs.Length == 0) continue;
 
-            SectionHost.Children.Add(BuildGroupHeader(groupKey, groupTitle));
+            NavHost.Children.Add(NavLabel(groupTitle));
 
-            // 不属于任何二级分组的卡片排在最前（常用组全部卡片都走这一支）
+            // 不属于任何二级分组的项直接排在组标签下面（常用组全部走这一支）
             foreach (var def in defs.Where(d => d.SubGroup.Length == 0))
-                AddCard(BuildCard(def, BodyFor(def)));
+                NavHost.Children.Add(BuildNavItem(def, indent: 0));
 
             foreach (var sub in CardCatalog.SubGroupsOf(groupKey))
             {
-                SectionHost.Children.Add(BuildSubGroupHeader(sub));
+                NavHost.Children.Add(NavLabel(sub.Title, indent: 22));
                 foreach (var def in CardCatalog.CardsInSubGroup(groupKey, sub.Key))
-                    AddCard(BuildCard(def, BodyFor(def)));
+                    NavHost.Children.Add(BuildNavItem(def, indent: 10));
             }
         }
 
-        // 首次运行才把「高级」组收起来；老用户的配置里没有这些键，
-        // 保持展开（不打扰）—— 别拿升级当借口替他改折叠偏好。
-        if (_settings.FirstRun)
-            _settings.CollapsedCards = CardCatalog.DefaultCollapsedCards();
+        // 「检测选项」不是检测项，单独归到「配置」下 —— 它是改参数的地方，
+        // 混在检测项里会让人以为它也是一种「检查」。
+        NavHost.Children.Add(NavLabel("配置"));
+        NavHost.Children.Add(BuildNavItem(CardCatalog.OptionsCard, indent: 0));
 
-        foreach (var key in _settings.CollapsedCards)
-            if (_cardByKey.TryGetValue(key, out var c))
-                SetCollapsed(c, true, persist: false);
-
-        UpdateToggleAllLabel();
-        UpdateGroupHeaders();
+        // 恢复上次停留的检测项。配置里那个键认不出来（手改错了、或那张卡片被删了）
+        // 就退回概览，并且**把这个回退写回配置** —— 让配置自愈，
+        // 否则每次启动都要重新判断一次，而且用户永远不知道自己的配置已经失效了。
+        string want = _settings.SelectedCard;
+        if (!_cardByKey.ContainsKey(want))
+        {
+            want = "overview";
+            _settings.SelectedCard = want;
+            _settings.Save();
+        }
+        SelectCard(want, persist: false);
     }
 
-    /// <summary>
-    /// 一行分组标题：左边组名，右边计数与操作提示，整行可点。
-    /// 刻意不套卡片外壳 —— 它只是个分隔标签，套了就和真卡片混淆。
-    /// </summary>
-    private UIElement BuildGroupHeader(string groupKey, string title)
+    private TextBlock NavLabel(string text, double indent = 0)
     {
-        var label = MakeText(title, 13, Res("MutedBrush"));
-
-        var right = MakeText("", 11.5, Res("MutedBrush"));
-        right.HorizontalAlignment = HorizontalAlignment.Right;
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        Grid.SetColumn(label, 0);
-        Grid.SetColumn(right, 1);
-        grid.Children.Add(label);
-        grid.Children.Add(right);
-
-        var btn = new Button
+        var t = new TextBlock
         {
-            Style = (Style)FindResource("GroupHeaderButton"),
-            Content = grid,
-            ToolTip = $"展开或收起「{title}」组的全部卡片",
+            Text = text,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Res("MutedBrush"),
+            Margin = new Thickness(17 + indent, 18, 12, 6),
         };
-        // 标题由两个 TextBlock 拼成，UIA 从 Content 推不出名字，显式给一个
-        System.Windows.Automation.AutomationProperties.SetName(btn, title);
-        btn.Click += (_, _) => ToggleGroup(groupKey);
-
-        _groupHeaders[groupKey] = (btn, right);
-        _groupCards[groupKey] = new List<SectionCard>();
-        return btn;
+        return t;
     }
 
-    /// <summary>
-    /// 一行二级分组标题（网络路径 / 连接能力 / 协议）。
-    /// **刻意做成不可点的纯标签**：一级分组标题可点是因为它有明确的语义（整组收起），
-    /// 而二级分组再引入一套折叠状态，就会和「组收起」「卡片收起」打架 ——
-    /// 三套状态互相覆盖是这类界面最容易出的 bug。它只负责把高级区分成三块，让人扫得动。
-    /// </summary>
-    private UIElement BuildSubGroupHeader(SubGroupDef sub)
+    private UIElement BuildNavItem(SectionDef def, double indent)
     {
-        var bar = new Border
+        var card = new SectionCard { Key = def.Key, TabIndex = def.TabIndex };
+
+        card.NavDot = new Border
         {
-            Width = 3,
-            Height = 12,
+            Width = 7,
+            Height = 7,
+            CornerRadius = new CornerRadius(4),
             Background = Res("FaintBrush"),
-            CornerRadius = new CornerRadius(2),
-            Margin = new Thickness(14, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
         };
 
-        var label = MakeText(sub.Title, 12, Res("MutedBrush"), FontWeights.SemiBold);
-
-        var panel = new StackPanel
+        // 刻意不设 Foreground：让它从 RadioButton 继承，选中时才会跟着模板触发器变成主色。
+        var label = new TextBlock
         {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 8, 0, 2),
+            Text = def.Title,
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        panel.Children.Add(bar);
-        panel.Children.Add(label);
-        System.Windows.Automation.AutomationProperties.SetName(panel, sub.Title);
-        return panel;
-    }
-
-    /// <summary>卡片的展示区。只有「检测选项」那张卡用 XAML 里声明的输入控件，其余都是空面板由渲染层填。</summary>
-    private UIElement BodyFor(SectionDef def)
-        => def.Key == OptionsKey ? OptionsFields : (UIElement)new StackPanel();
-
-    private void AddCard(SectionCard card)
-    {
-        _cards.Add(card);
-        _cardByKey[card.Key] = card;
-        SectionHost.Children.Add(card.Root);
-
-        var group = CardCatalog.GroupOfCard(card.Key);
-        if (group.Length > 0 && _groupCards.TryGetValue(group, out var list))
-            list.Add(card);
-    }
-
-    private SectionCard BuildCard(SectionDef def, UIElement body)
-    {
-        string key = def.Key, title = def.Title, hint = def.Hint;
-        int tabIndex = def.TabIndex;
-        var actions = def.Actions;
-
-        var card = new SectionCard { Key = key, TabIndex = tabIndex };
-
-        // ---- 标题栏 ----
-        card.Chevron = MakeText("\u25BE", 11, Res("FaintBrush"));
-        card.Chevron.Margin = new Thickness(10, 0, 0, 0);
-
-        var titleText = MakeText(title, 14, Res("TextBrush"), FontWeights.SemiBold);
 
         card.BadgeBox = new Border
         {
             CornerRadius = new CornerRadius(9),
-            Padding = new Thickness(8, 1, 8, 2),
-            Margin = new Thickness(9, 0, 0, 0),
+            Padding = new Thickness(7, 1, 7, 2),
+            Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             Visibility = Visibility.Collapsed,
         };
-        card.BadgeText = MakeText("", 11.5, Res("MutedBrush"), FontWeights.SemiBold);
+        card.BadgeText = new TextBlock
+        {
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+        };
         card.BadgeBox.Child = card.BadgeText;
 
-        card.HintText = MakeText(hint, 11.5, Res("MutedBrush"));
-        card.HintText.Margin = new Thickness(12, 0, 0, 0);
-        card.HintText.TextTrimming = TextTrimming.CharacterEllipsis;
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(card.NavDot, 0);
+        Grid.SetColumn(label, 1);
+        Grid.SetColumn(card.BadgeBox, 2);
+        grid.Children.Add(card.NavDot);
+        grid.Children.Add(label);
+        grid.Children.Add(card.BadgeBox);
 
-        var headerGrid = new Grid();
-        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 标题
-        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 角标
-        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 说明
-        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 运行按钮
-        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 折叠箭头
-
-        Grid.SetColumn(titleText, 0);
-        Grid.SetColumn(card.BadgeBox, 1);
-        Grid.SetColumn(card.HintText, 2);
-        Grid.SetColumn(card.Chevron, 4);
-        headerGrid.Children.Add(titleText);
-        headerGrid.Children.Add(card.BadgeBox);
-        headerGrid.Children.Add(card.HintText);
-        headerGrid.Children.Add(card.Chevron);
-
-        if (actions.Length > 0)
+        card.NavItem = new RadioButton
         {
-            var bar = new StackPanel
+            Style = (Style)FindResource("NavItem"),
+            Content = grid,
+            GroupName = "NetCheckNav",
+            Margin = new Thickness(indent, 0, 0, 0),
+            ToolTip = def.Hint,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(card.NavItem, def.Title);
+        card.NavItem.Checked += (_, _) => SelectCard(card.Key);
+
+        // ---- 详情面板的容器与运行按钮 ----
+        card.BodyHost = new StackPanel();
+
+        card.ActionBar = new StackPanel { Orientation = Orientation.Horizontal };
+        for (int i = 0; i < def.Actions.Length; i++)
+        {
+            var a = def.Actions[i];
+            // 一张卡片有两个以上运行按钮时，只有第一个用主按钮，其余用次级按钮。
+            // 全用主按钮的话，路径页「路由追踪 + MTU 探测」两个并排的实心蓝块
+            // 会互相抢注意力，而且看不出哪个是更常用的那个。
+            var btn = new Button
             {
-                Orientation = Orientation.Horizontal,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(12, 0, 0, 0),
+                Content = a.Label,
+                Style = (Style)FindResource(i == 0 ? "PrimaryButton" : "SoftButton"),
+                FontSize = 12.5,
+                Padding = new Thickness(16, 7, 16, 7),
+                // 样式自带 8px 右外边距，并排两个按钮时正好当间距；
+                // 最后一个再抹掉，否则整组右侧多出一截空白
+                Margin = i == def.Actions.Length - 1 ? new Thickness(0) : new Thickness(0, 0, 8, 0),
+                ToolTip = a.Tip,
             };
-            foreach (var a in actions)
-            {
-                var btn = new Button
-                {
-                    Content = a.Label,
-                    Style = (Style)FindResource("SoftButton"),
-                    FontSize = 12,
-                    Padding = new Thickness(13, 4, 13, 4),
-                    // 标题栏里的按钮不要 SoftButton 默认的下边距，否则整行会往下偏 8px
-                    Margin = new Thickness(0, 0, 6, 0),
-                    ToolTip = a.Tip,
-                };
-                var cb = new CardButton { Btn = btn, TaskKey = a.TaskKey, Label = a.Label };
-                btn.Click += async (_, _) => await RunTaskAsync(cb.TaskKey);
-                card.Buttons.Add(cb);
-                bar.Children.Add(btn);
-            }
-            Grid.SetColumn(bar, 3);
-            headerGrid.Children.Add(bar);
+            var cb = new CardButton { Btn = btn, TaskKey = a.TaskKey, Label = a.Label };
+            btn.Click += async (_, _) => await RunTaskAsync(cb.TaskKey);
+            card.Buttons.Add(cb);
+            card.ActionBar.Children.Add(btn);
         }
 
-        card.Header = new Border
-        {
-            // 必须是 Transparent 而不是 null：Background 为空时整块区域不参与命中测试，点标题折不起来
-            Background = Brushes.Transparent,
-            Padding = new Thickness(14, 11, 14, 11),
-            Cursor = Cursors.Hand,
-            Child = headerGrid,
-        };
-        card.Header.MouseLeftButtonUp += (_, e) =>
-        {
-            // 标题栏里的按钮自己会吃掉 MouseLeftButtonUp，这里再兜一层，避免以后换控件时误折叠
-            if (IsInsideButton(e.OriginalSource as DependencyObject)) return;
-            SetCollapsed(card, !card.Collapsed);
-            e.Handled = true;
-        };
-
-        // ---- 内容区 ----
-        card.BodyHost = body as StackPanel ?? new StackPanel { Children = { body } };
-        card.Body = new Border
-        {
-            Padding = new Thickness(14, 0, 14, 14),
-            Child = card.BodyHost,
-        };
-
-        // ---- 外壳 ----
-        var outer = new Grid();
-        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        Grid.SetRow(card.Header, 0);
-        Grid.SetRow(card.Body, 1);
-        outer.Children.Add(card.Header);
-        outer.Children.Add(card.Body);
-
-        card.Root = new Border
-        {
-            Background = Res("CardBrush"),
-            BorderBrush = Res("LineBrush"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Margin = new Thickness(0, 0, 0, 12),
-            Child = outer,
-        };
-
-        return card;
+        _cards.Add(card);
+        _cardByKey[card.Key] = card;
+        return card.NavItem;
     }
 
-    private static bool IsInsideButton(DependencyObject? d)
+    // ==================================================================
+    // 选中与详情
+    // ==================================================================
+
+    /// <summary>防止「设置 IsChecked → 触发 Checked → 又调回这里」的递归。</summary>
+    private bool _suppressNav;
+
+    /// <summary>
+    /// 切换到某个检测项。导航栏点击、菜单、命令行 <c>--tab</c>、
+    /// 以及问题条目跳转，全都走这一个入口。
+    /// </summary>
+    private void SelectCard(string cardKey, bool persist = true)
     {
-        while (d != null)
+        if (_suppressNav) return;
+        if (!_cardByKey.TryGetValue(cardKey, out var card)) return;
+
+        _selectedKey = card.Key;
+
+        // 让导航栏的选中态跟上。赋 IsChecked 会再触发一次 Checked 事件，
+        // 用 _suppressNav 挡掉那一层 —— 否则会无限递归下去。
+        // （RadioButton.IsChecked 是 bool?，所以和 true 比而不是直接当条件用。）
+        if (card.NavItem.IsChecked != true)
         {
-            if (d is ButtonBase) return true;
-            d = VisualTreeHelper.GetParent(d);
+            _suppressNav = true;
+            try { card.NavItem.IsChecked = true; }
+            finally { _suppressNav = false; }
         }
-        return false;
+
+        // 详情面板头部：标题、说明、运行按钮
+        var def = CardCatalog.CardForKey(card.Key);
+        DetailTitle.Text = def?.Title ?? card.Key;
+        // 选项页的副标题是当前配置摘要（「目标 223.5.5.5 · 常用服务（5 个端口）· 并发 64」），
+        // 其余项用目录里那句固定说明。
+        DetailHint.Text = card.Key == OptionsKey ? _optionsHint : (def?.Hint ?? "");
+
+        // 按钮对象只建一次（SetBusy 要改它们的文案），这里只是把对应那一组挂上去。
+        // 挂之前先从原来的父节点摘掉 —— 同一个元素不能有两个父节点。
+        DetailActions.Children.Clear();
+        if (card.ActionBar.Children.Count > 0) DetailActions.Children.Add(card.ActionBar);
+
+        FillDetail(card);
+
+        if (persist)
+        {
+            _settings.SelectedCard = card.Key;
+            _settings.Save();
+        }
+
+        // 换了一项就回到顶部，否则从上一项滚到一半的位置接着看，会以为内容缺了
+        DetailScroll.ScrollToTop();
     }
+
+    /// <summary>
+    /// 把某一项的展示区挂进详情面板。
+    /// **只有当前选中这一项的内容会被重建**（见 <see cref="Render"/>）——
+    /// 扫 1024 个端口时，十个检测项的内容全建一遍会白白构造上千个元素。
+    /// </summary>
+    private void FillDetail(SectionCard card)
+    {
+        DetailHost.Children.Clear();
+
+        if (card.Key == OptionsKey)
+        {
+            DetailHost.Children.Add(OptionsFields);
+            return;
+        }
+
+        DetailHost.Children.Add(card.BodyHost);
+
+        if (_view != null)
+        {
+            var def = CardCatalog.CardForKey(card.Key);
+            if (def != null) FillCardBody(card, def, _view);
+        }
+    }
+
+    /// <summary>
+    /// 导航项左侧的状态点。比图标更有用：一眼扫下来就知道哪几项有问题。
+    /// 检测选项不是检测项，没有状态，永远中性灰。
+    /// </summary>
+    private void UpdateNavDots(ReportView v)
+    {
+        foreach (var card in _cards)
+        {
+            var def = CardCatalog.CardForKey(card.Key);
+            if (def == null) continue;
+
+            card.NavDot.Background = NavTone(def, v) switch
+            {
+                Tone.Bad => Res("DangerBrush"),
+                Tone.Warn => Res("WarnBrush"),
+                Tone.Good => Res("OkBrush"),
+                _ => Res("FaintBrush"),
+            };
+        }
+    }
+
+    /// <summary>
+    /// 一项的总体状态。没有数据是中性（还没测，不是「正常」—— 报绿等于撒谎）；
+    /// 有数据且没问题才是绿。概览项汇总全部问题，其余项只看指向自己的那些。
+    /// </summary>
+    private static Tone NavTone(SectionDef def, ReportView v)
+    {
+        if (def.TabIndex < 0 || def.TabIndex >= v.Tabs.Count) return Tone.Neutral;
+        if (!v.Tabs[def.TabIndex].HasData) return Tone.Neutral;
+
+        var mine = def.TabIndex == ReportViewBuilder.OverviewIndex
+            ? v.Issues
+            : v.Issues.Where(i => i.TargetTab == def.TabIndex).ToList();
+
+        if (mine.Any(i => i.Tone == Tone.Bad)) return Tone.Bad;
+        if (mine.Any(i => i.Tone == Tone.Warn)) return Tone.Warn;
+        return Tone.Good;
+    }
+
 
     private static TextBlock MakeText(string s, double size, Brush brush, FontWeight? weight = null)
         => new()
@@ -389,126 +429,123 @@ public partial class MainWindow : Window
     private Brush Res(string key) => (Brush)FindResource(key);
 
     // ==================================================================
-    // 折叠
+    // 菜单
     // ==================================================================
 
-    private void SetCollapsed(SectionCard card, bool collapsed, bool persist = true)
-    {
-        card.Collapsed = collapsed;
-        card.Body.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        card.Chevron.Text = collapsed ? "\u25B8" : "\u25BE";   // ▸ / ▾
+    private void MenuShowOptions_Click(object sender, RoutedEventArgs e) => SelectCard(OptionsKey);
 
-        // Render() 会跳过收起的卡片（省掉上千个元素），所以展开时要补一次，
-        // 否则展开后看到的还是上次收起之前的内容。
-        if (!collapsed && _view != null)
-        {
-            var def = CardCatalog.Sections.FirstOrDefault(d => d.Key == card.Key);
-            if (def != null) FillCardBody(card, def, _view);
-        }
-
-        if (persist)
-        {
-            PersistCollapsed();
-            UpdateToggleAllLabel();
-        }
-    }
-
-    private void PersistCollapsed()
-    {
-        _settings.CollapsedCards = _cards.Where(c => c.Collapsed).Select(c => c.Key).ToArray();
-        _settings.Save();
-        UpdateGroupHeaders();
-    }
-
-    private void UpdateToggleAllLabel()
-        => BtnToggleAll.Content = _cards.Any(c => !c.Collapsed) ? "全部收起" : "全部展开";
-
-    /// <summary>
-    /// 点分组标题 = 批量收起 / 展开该组。
-    /// **刻意不引入第二套折叠状态**：这里就是逐张调 SetCollapsed，
-    /// 折叠状态仍然按卡片键存进 CollapsedCards，不新增字段 ——
-    /// 否则「组收起」和「卡片收起」两套状态会互相打架。
-    /// </summary>
-    private void ToggleGroup(string groupKey)
-    {
-        if (!_groupCards.TryGetValue(groupKey, out var cards) || cards.Count == 0) return;
-
-        // 只要组里还有展开的，就整体收起；全收着才展开
-        bool collapse = cards.Any(c => !c.Collapsed);
-        foreach (var c in cards) SetCollapsed(c, collapse, persist: false);
-
-        PersistCollapsed();
-        UpdateToggleAllLabel();
-    }
-
-    private void UpdateGroupHeaders()
-    {
-        foreach (var (groupKey, entry) in _groupHeaders)
-        {
-            if (!_groupCards.TryGetValue(groupKey, out var cards) || cards.Count == 0) continue;
-            entry.Right.Text = cards.All(c => c.Collapsed)
-                ? $"{cards.Count} 项 · 点击展开"
-                : $"{cards.Count} 项 · 点击收起";
-        }
-    }
-
-    private void SetAllCollapsed(bool collapsed)
-    {
-        foreach (var c in _cards) SetCollapsed(c, collapsed, persist: false);
-        PersistCollapsed();
-        UpdateToggleAllLabel();
-    }
-
-    private void BtnToggleAll_Click(object sender, RoutedEventArgs e)
-        => SetAllCollapsed(_cards.Any(c => !c.Collapsed));
-
-    private void MenuExpandAll_Click(object sender, RoutedEventArgs e) => SetAllCollapsed(false);
-
-    private void MenuCollapseAll_Click(object sender, RoutedEventArgs e) => SetAllCollapsed(true);
-
-    private void MenuShowOptions_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_cardByKey.TryGetValue(OptionsKey, out var card)) return;
-        SetCollapsed(card, false);
-        card.Root.BringIntoView();
-    }
-
-    private void MenuTab_Click(object sender, RoutedEventArgs e)
+    private void MenuNav_Click(object sender, RoutedEventArgs e)
     {
         // 菜单项的 Tag 一律写卡片键名，不写数字 —— 数字会随卡片顺序漂移
-        if (sender is MenuItem mi && mi.Tag is string s) ScrollToCard(s);
+        if (sender is MenuItem mi && mi.Tag is string s) SelectCard(s);
+    }
+
+    // ==================================================================
+    // 主题
+    // ==================================================================
+
+    /// <summary>
+    /// 应用栏上的太阳 / 月亮按钮：在浅色与深色之间直接对调。
+    /// 它不写「跟随系统」—— 那个状态只能从「视图」菜单进（见 <see cref="MenuTheme_Click"/>），
+    /// 因为一个两态按钮表达不了三态，硬塞会让「跟随系统」这个选项悄悄消失。
+    /// </summary>
+    private void BtnTheme_Click(object sender, RoutedEventArgs e)
+        => ApplyTheme(Theme.IsDark ? ThemeMode.Light : ThemeMode.Dark, persist: true);
+
+    /// <summary>「视图」菜单里的主题三选一，Tag 就是配置文件里存的字符串。</summary>
+    private void MenuTheme_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is string s)
+            ApplyTheme(Theme.FromSetting(s), persist: true);
+    }
+
+    /// <summary>「视图 → 切换浅色 / 深色」，跟 Ctrl+T、标题栏按钮是同一件事。</summary>
+    private void MenuToggleTheme_Click(object sender, RoutedEventArgs e)
+        => ApplyTheme(Theme.IsDark ? ThemeMode.Light : ThemeMode.Dark, persist: true);
+
+    private void ApplyTheme(ThemeMode mode, bool persist)
+    {
+        Theme.Apply(mode);
+        _settings.Theme = Theme.ToSetting(mode);
+        if (persist) _settings.Save();
+        SyncThemeUi();
+    }
+
+    /// <summary>把当前主题状态同步到界面：菜单勾选 + 明暗图标。</summary>
+    private void SyncThemeUi()
+    {
+        IconSun.Visibility = Theme.IsDark ? Visibility.Collapsed : Visibility.Visible;
+        IconMoon.Visibility = Theme.IsDark ? Visibility.Visible : Visibility.Collapsed;
+        BtnTheme.ToolTip = Theme.IsDark ? "切换到浅色主题" : "切换到深色主题";
+
+        // 三个主题项是互斥的单选，MenuItem 自己不会互斥，得手工清一遍
+        var items = new[] { MenuThemeSystem, MenuThemeLight, MenuThemeDark };
+        string current = Theme.ToSetting(Theme.Mode);
+        foreach (var item in items)
+            item.IsChecked = Equals(item.Tag, current);
     }
 
     /// <summary>
-    /// 按 <c>--tab</c> 的原始值滚动。两种写法：卡片键名（推荐）与数字索引（兼容）。
+    /// 主题变了。XAML 声明的界面（标题栏、工具栏、状态栏、导航栏容器）靠
+    /// `{DynamicResource}` 自己跟着换；代码在运行时临时建出来的东西要手工补一遍 —
+    /// 导航项的状态点/角标，以及当前详情面板里的内容（它们拿的是取色时的快照，
+    /// 不重建就停在旧配色上）。
+    /// </summary>
+    private void OnThemeChanged()
+    {
+        // 系统标题栏是 DWM 画的，改不了颜色只能重新告诉它一次
+        Theme.ApplyTitleBar(this);
+
+        if (_view != null)
+        {
+            // 导航栏的状态点和角标
+            foreach (var def in SectionDefs)
+                if (_cardByKey.TryGetValue(def.Key, out var card)) UpdateBadge(card, def, _view);
+            UpdateNavDots(_view);
+
+            // 详情面板内容（指标块、结论横幅、表格…全部重建一次）
+            if (_cardByKey.TryGetValue(_selectedKey, out var selected))
+            {
+                var def = CardCatalog.CardForKey(selected.Key);
+                if (def != null) FillCardBody(selected, def, _view);
+            }
+        }
+
+        SyncThemeUi();
+    }
+
+    /// <summary>
+    /// 窗口句柄就绪后才能设置系统标题栏的明暗 —— WindowInteropHelper.Handle 在
+    /// 构造函数里还是 IntPtr.Zero，那时调用等于什么也没做。
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        Theme.ApplyTitleBar(this);
+    }
+
+    private void UpdateStatusDot(bool busy)
+        => StatusDot.Background = busy ? Res("AccentBrush") : Res("FaintBrush");
+
+    /// <summary>
+    /// 按 <c>--tab</c> 的原始值切换检测项。两种写法：卡片键名（推荐）与数字索引（兼容）。
     ///
     /// 键名优先。数字绑定了「卡片顺序」这个最容易变的东西 ——
     /// IPv6 卡片插进来，<c>--tab 3</c> 就从 DNS 变成了连通性，
     /// 而已经发出去的脚本不会跟着改。键名没有这个问题。
     /// </summary>
-    private void ScrollToTabSpec(string spec)
+    private void SelectTabSpec(string spec)
     {
         var def = CardCatalog.CardForKey(spec)
                ?? (int.TryParse(spec, out var n) ? CardCatalog.CardForTab(n) : null);
         if (def == null) return;
-        ScrollToCard(def.Key);
+        SelectCard(def.Key);
     }
 
     private void ScrollToTab(int tabIndex)
     {
         var def = CardCatalog.CardForTab(tabIndex);
-        if (def != null) ScrollToCard(def.Key);
-    }
-
-    /// <summary>
-    /// 滚动到某个检测项卡片。以前是切换标签页，现在只是把卡片滚进视野。
-    /// 顺带展开它 —— 跳过去却只看到一行标题（卡片是收着的）等于没跳。
-    /// </summary>
-    private void ScrollToCard(string cardKey)
-    {
-        if (!_cardByKey.TryGetValue(cardKey, out var card)) return;
-        if (card.Collapsed) SetCollapsed(card, false);
-        card.Root.BringIntoView();
+        if (def != null) SelectCard(def.Key);
     }
 
     // ==================================================================
@@ -522,21 +559,21 @@ public partial class MainWindow : Window
         // ---- 命令行：--help 直接弹说明后退出 ----
         if (_cli.ShowHelp)
         {
-            MessageBox.Show(this, CommandLineOptions.HelpText, "NetCheck 命令行参数",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Dialogs.Show(this, "NetCheck 命令行参数", CommandLineOptions.HelpText,
+                DialogButton.Ok, DialogIcon.Info);
             Application.Current.Shutdown();
             return;
         }
 
         if (_cli.Errors.Count > 0)
         {
-            MessageBox.Show(this,
+            Dialogs.Show(this, "NetCheck",
                 "以下命令行参数无法识别，已忽略：\n\n  " + string.Join("\n  ", _cli.Errors)
                 + "\n\n用 --help 查看支持的参数。",
-                "NetCheck", MessageBoxButton.OK, MessageBoxImage.Warning);
+                DialogButton.Ok, DialogIcon.Warning);
         }
 
-        if (_cli.Tab is string tabSpec) ScrollToTabSpec(tabSpec);
+        if (_cli.Tab is string tabSpec) SelectTabSpec(tabSpec);
 
         // ---- 开发预览：NETCHECK_UI_DEMO=1 载入样例数据 ----
         if (Environment.GetEnvironmentVariable("NETCHECK_UI_DEMO") == "1")
@@ -548,7 +585,7 @@ public partial class MainWindow : Window
             UpdateExportButtons();
 
             var demoTab = Environment.GetEnvironmentVariable("NETCHECK_UI_DEMO_TAB");
-            if (!string.IsNullOrWhiteSpace(demoTab)) ScrollToTabSpec(demoTab!);
+            if (!string.IsNullOrWhiteSpace(demoTab)) SelectTabSpec(demoTab!);
             return;
         }
 
@@ -624,7 +661,6 @@ public partial class MainWindow : Window
         s.TraceTimeoutMs = ParseInt(TxtTraceTimeout.Text, s.TraceTimeoutMs);
         s.SpeedSeconds = ParseInt(TxtSpeedSeconds.Text, s.SpeedSeconds);
         s.DnsTimeoutMs = ParseInt(TxtDnsTimeout.Text, s.DnsTimeoutMs);
-        s.CollapsedCards = _cards.Where(c => c.Collapsed).Select(c => c.Key).ToArray();
 
         var before = Snapshot(s);
         s.Clamp();
@@ -705,9 +741,17 @@ public partial class MainWindow : Window
         SetOptionsHint($"目标 {TxtHost.Text.Trim()} · {shortName}（{ports.Length} 个端口）· 并发 {concurrency}");
     }
 
+    /// <summary>
+    /// 「检测选项」的说明文字。它同时是详情面板头部那一行副标题 ——
+    /// 选项页讲的就是当前配置是什么，所以两处用同一句话。
+    /// 不选中选项页时也照样记着，切过去就是最新的。
+    /// </summary>
+    private string _optionsHint = CardCatalog.OptionsCard.Hint;
+
     private void SetOptionsHint(string text)
     {
-        if (_cardByKey.TryGetValue(OptionsKey, out var card)) card.HintText.Text = text;
+        _optionsHint = text;
+        if (_selectedKey == OptionsKey) DetailHint.Text = text;
     }
 
     private void BtnResetOptions_Click(object sender, RoutedEventArgs e)
@@ -1047,9 +1091,10 @@ public partial class MainWindow : Window
 
         if (!quiet)
         {
-            // 卡片收起来的时候跑检测等于什么都没看见，先展开
+            // 切到这一项再跑 —— 跑完了却停在别的页面上，等于什么都没看见。
+            // （以前是「展开对应卡片」，现在导航取代了折叠，等价动作就是选中它。）
             var card = CardForTask(key);
-            if (card != null && card.Collapsed) SetCollapsed(card, false);
+            if (card != null) SelectCard(card.Key);
 
             SetBusy(true);
             Bar.IsIndeterminate = true;
@@ -1084,8 +1129,7 @@ public partial class MainWindow : Window
             sw.Stop();
             LblStatus.Text = $"{label}：失败（{ex.Message}）";
             if (!quiet)
-                MessageBox.Show(this, ex.Message, $"{label} 失败",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                Dialogs.Show(this, $"{label} 失败", ex.Message, DialogButton.Ok, DialogIcon.Warning);
         }
         finally
         {
@@ -1119,7 +1163,11 @@ public partial class MainWindow : Window
         // 工具栏的「一键检测」是卡片按钮之外的第二条入口，不一起挡掉就绕过去了。
         // 「诊断包」同理，只是它还要看有没有数据可导，所以交给 UpdateExportButtons 统一算。
         BtnQuick.IsEnabled = !busy;
+        // 「取消」空闲时直接收起来，而不是留着个灰掉的按钮占位置 ——
+        // 它只在忙的时候有意义，闲着摆在那儿纯粹是噪音。
         BtnCancel.IsEnabled = busy;
+        BtnCancel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        UpdateStatusDot(busy);
     }
 
     /// <summary>
@@ -1162,15 +1210,21 @@ public partial class MainWindow : Window
         var v = ReportViewBuilder.Build(_state);
         _view = v;
 
+        // 导航栏的状态点和问题角标全部刷新 —— 它们正是「一眼看出哪项有问题」的来源
         foreach (var def in SectionDefs)
         {
             if (!_cardByKey.TryGetValue(def.Key, out var card)) continue;
-
             UpdateBadge(card, def, v);
+        }
+        UpdateNavDots(v);
 
-            // 收起的卡片不重建内容：扫 1024 个端口时，即使卡片是收着的，
-            // 每次检测完也会白白构造上千个元素。展开时由 SetCollapsed 补渲染。
-            if (!card.Collapsed) FillCardBody(card, def, v);
+        // **只重建当前选中那一项的内容。** 十一个检测项的内容全建一遍，
+        // 扫 1024 个端口时会白白构造上千个元素，而其中十个根本看不见。
+        // 切到别的项时由 FillDetail() 用最新的 _view 补渲染。
+        if (_cardByKey.TryGetValue(_selectedKey, out var selected))
+        {
+            var def = CardCatalog.CardForKey(selected.Key);
+            if (def != null) FillCardBody(selected, def, v);
         }
 
         UpdateSummary(v);
@@ -1215,24 +1269,63 @@ public partial class MainWindow : Window
 
         var tv = def.TabIndex >= 0 && def.TabIndex < v.Tabs.Count ? v.Tabs[def.TabIndex] : null;
 
-        // 概览卡片额外挂上指标卡和结论条 —— 它们本来就是「全局摘要」，
-        // 放进概览卡片比悬在所有内容之上更说得通。
-        if (def.TabIndex == ReportViewBuilder.OverviewIndex && v.Cards.Count > 0)
+        // 概览页 = 仪表盘：结论横幅 → 指标块 → 结论胶囊 → 问题清单 → 检测摘要。
+        // 顺序就是「先给结论、再给证据、最后给明细」，打开就能决定要不要往下看。
+        if (def.TabIndex == ReportViewBuilder.OverviewIndex)
         {
-            var grid = new UniformGrid { Columns = MetricColumns(v.Cards.Count), Margin = new Thickness(0, 0, -10, 0) };
-            foreach (var c in v.Cards) grid.Children.Add(Renderer.BuildCard(c, ScrollToTab));
-            card.BodyHost.Children.Add(grid);
-        }
+            var (verdict, tone, summary) = HeroState(v);
+            card.BodyHost.Children.Add(Renderer.BuildHero(
+                verdict, tone, summary, v.AnyData ? _state.Timestamp : ""));
 
-        if (def.TabIndex == ReportViewBuilder.OverviewIndex && v.Chips.Count > 0)
-        {
-            var wrap = new WrapPanel { Margin = new Thickness(0, 10, 0, 2) };
-            foreach (var c in v.Chips) wrap.Children.Add(Renderer.BuildChip(c));
-            card.BodyHost.Children.Add(wrap);
+            if (v.Cards.Count > 0)
+            {
+                var grid = new UniformGrid
+                {
+                    Columns = MetricColumns(v.Cards.Count),
+                    Margin = new Thickness(0, 0, -10, 0),
+                };
+                foreach (var c in v.Cards) grid.Children.Add(Renderer.BuildCard(c, ScrollToTab));
+                card.BodyHost.Children.Add(grid);
+            }
+
+            if (v.Chips.Count > 0)
+            {
+                var wrap = new WrapPanel { Margin = new Thickness(0, 12, 0, 2) };
+                foreach (var c in v.Chips) wrap.Children.Add(Renderer.BuildChip(c));
+                card.BodyHost.Children.Add(wrap);
+            }
         }
 
         if (tv != null)
             card.BodyHost.Children.Add(Renderer.BuildTabBody(tv, ScrollToTab));
+    }
+
+    /// <summary>
+    /// 概览结论横幅要的三样东西：一句话结论、它的色调、以及关键指标摘要。
+    ///
+    /// 结论只由问题清单决定 —— 和角标、状态点用的是同一份数据。
+    /// 不另起一套判断，否则会出现「角标说 2 个问题、横幅说一切正常」这种自相矛盾。
+    /// </summary>
+    private static (string Verdict, Tone Tone, string Summary) HeroState(ReportView v)
+    {
+        int bad = v.Issues.Count(i => i.Tone == Tone.Bad);
+        int warn = v.Issues.Count(i => i.Tone == Tone.Warn);
+
+        var (verdict, tone) = !v.AnyData
+            ? ("还没有检测数据", Tone.Neutral)
+            : bad > 0 ? ($"发现 {bad} 项严重问题", Tone.Bad)
+            : warn > 0 ? ($"网络基本正常，{warn} 项需要留意", Tone.Warn)
+            : ("网络状态良好", Tone.Good);
+
+        // 摘要取前四张有数据的指标块，拼成「标题 值」的形式。
+        // 四张是上限：再多就会换行，横幅从「一眼扫过」变成「需要读」。
+        var parts = v.Cards
+            .Where(c => c.HasData)
+            .Take(4)
+            .Select(c => $"{c.Title} {c.Value}")
+            .ToArray();
+
+        return (verdict, tone, string.Join(" · ", parts));
     }
 
     /// <summary>
@@ -1290,8 +1383,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "复制失败：" + ex.Message, "NetCheck",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialogs.Show(this, "NetCheck", "复制失败：" + ex.Message,
+                DialogButton.Ok, DialogIcon.Warning);
         }
     }
 
@@ -1329,8 +1422,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "导出失败：" + ex.Message, "NetCheck",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            Dialogs.Show(this, "NetCheck", "导出失败：" + ex.Message,
+                DialogButton.Ok, DialogIcon.Error);
         }
     }
 
@@ -1367,23 +1460,23 @@ public partial class MainWindow : Window
             if (res.Ok)
             {
                 LblStatus.Text = $"{(masked ? "脱敏诊断包" : "诊断包")}已导出（{res.SizeBytes / 1024.0:F0} KB）";
-                var open = MessageBox.Show(this,
+                var open = Dialogs.Show(this, "导出成功",
                     $"{(masked ? "脱敏诊断包" : "诊断包")}已保存：\n{dlg.FileName}\n\n"
                     + $"包含 {res.Entries.Count} 个文件，"
                     + (masked
                         ? "主机名 / MAC / 公网 IP 已打码，可以放心转发。\n\n"
                         : "内容未脱敏，含主机名与公网出口 IP，转发前请留意。\n\n")
                     + "是否打开所在文件夹？",
-                    "导出成功", MessageBoxButton.YesNo, MessageBoxImage.Information);
-                if (open == MessageBoxResult.Yes)
+                    DialogButton.YesNo, DialogIcon.Info);
+                if (open)
                     Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{dlg.FileName}\"")
                     { UseShellExecute = true });
             }
             else
             {
                 LblStatus.Text = "诊断包导出失败";
-                MessageBox.Show(this, "导出失败：" + res.Error, "NetCheck",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                Dialogs.Show(this, "NetCheck", "导出失败：" + res.Error,
+                    DialogButton.Ok, DialogIcon.Error);
             }
         }
         finally
@@ -1437,21 +1530,22 @@ public partial class MainWindow : Window
 
     private void MenuHelp_Click(object sender, RoutedEventArgs e)
     {
-        MessageBox.Show(this,
+        Dialogs.Show(this, "NetCheck 使用说明",
             """
-            使用说明
+            界面怎么用
 
-            · 每个检测项是一张卡片，卡片标题栏右侧的按钮就是它的运行入口，
-              检测结果直接填在这张卡片里 —— 一个功能只有一个地方能点到。
-            · 点卡片标题栏可以折叠；工具栏的「全部收起 / 全部展开」一次处理所有卡片。
-            · 标题栏上的数字角标表示该检测项下有待处理的问题。
-              概览卡片的角标是全部问题的总数，因为它本身就是那份问题清单。
-            · 概览卡片里的每条问题都可以点击，直接跳到对应的检测项卡片看细节。
-            · 最上面的「检测选项」卡片可以调整目标主机、端口表达式、并发、超时等参数，
+            · 左边一列是全部检测项，点一项就在右边看它的详情。一次只看一项。
+            · 每项左边一个状态点：绿=正常、橙=有提醒、红=有严重问题、灰=还没测过；
+              右边的数字是问题条数。所以不用逐个点开就知道哪几项有问题。
+            · 每项的运行按钮在右边详情面板的右上角，和它要填充的内容在一起 ——
+              一个功能只有一个地方能点到。点下去会先切到那一项再跑。
+            · 最上面的「概览」是汇总：有结论横幅、六项指标、结论胶囊和问题清单。
+              清单里每一条都可以点，直接跳到对应的检测项看细节。
+            · 「配置 → 检测选项」可以调目标主机、端口表达式、并发、超时等参数，
               改动会自动保存；填了超出范围的数值会收敛到边界值并提示你。
-              折叠后标题栏仍会显示当前配置摘要。
             · 端口表达式支持逗号 / 空格 / 分号分隔与 8000-8010 这样的范围写法。
             · 在「目标主机」框里按回车 = 开始路由追踪；在「端口表达式」框里按回车 = 开始端口检测。
+            · 浅色 / 深色两套主题，Ctrl+T 切换；要固定成某一种走「视图」菜单。
 
             快捷键
               F5       一键检测
@@ -1459,18 +1553,20 @@ public partial class MainWindow : Window
               Ctrl+C   复制完整报告
               Ctrl+S   导出报告（txt / json）
               Ctrl+B   导出诊断包（zip）
+              Ctrl+Shift+B  脱敏诊断包
+              Ctrl+T   切换浅色 / 深色主题
 
             命令行
               用 --help 查看全部参数，例如：
               NetCheck.exe --host 8.8.8.8 --ports 53,443 --auto --export report.txt
             """,
-            "NetCheck 使用说明", MessageBoxButton.OK, MessageBoxImage.Information);
+            DialogButton.Ok, DialogIcon.Info);
     }
 
     private void MenuAbout_Click(object sender, RoutedEventArgs e)
     {
         var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.5.0";
-        MessageBox.Show(this,
+        Dialogs.Show(this, "关于 NetCheck",
             $"""
              NetCheck 网络体检  v{ver}
 
@@ -1483,7 +1579,7 @@ public partial class MainWindow : Window
              配置文件
                {AppSettings.SettingsPath}
              """,
-            "关于 NetCheck", MessageBoxButton.OK, MessageBoxImage.Information);
+            DialogButton.Ok, DialogIcon.Info);
     }
 
     // ==================================================================
@@ -1520,6 +1616,13 @@ public partial class MainWindow : Window
             case Key.S when ctrl:
                 e.Handled = true;
                 DoSave();
+                break;
+
+            case Key.T when ctrl:
+                // 在两种明暗之间对调。跟标题栏右侧那个按钮同一件事 ——
+                // 「跟随系统」只能从「视图」菜单选，快捷键和按钮都只负责快速对调。
+                e.Handled = true;
+                ApplyTheme(Theme.IsDark ? ThemeMode.Light : ThemeMode.Dark, persist: true);
                 break;
 
             case Key.B when ctrl:
@@ -1568,10 +1671,9 @@ public partial class MainWindow : Window
         // 诊断包导出也算「忙」：它正在写 zip，半途关掉会留下一个残缺文件。
         if (_busy && !_quietRun)
         {
-            var r = MessageBox.Show(this,
-                "还有任务正在进行，现在退出会中断它。确定要退出吗？",
-                "NetCheck", MessageBoxButton.OKCancel, MessageBoxImage.Question);
-            if (r != MessageBoxResult.OK)
+            if (!Dialogs.Show(this, "NetCheck",
+                    "还有任务正在进行，现在退出会中断它。确定要退出吗？",
+                    DialogButton.OkCancel, DialogIcon.Question))
             {
                 e.Cancel = true;
                 return;
@@ -1582,6 +1684,11 @@ public partial class MainWindow : Window
         SaveWindowGeometry();
         ReadOptionsInto(_settings);
         _settings.Save();
+
+        // Theme.Changed 是静态事件，订阅者会被它一直抓着不放。
+        // 窗口关了却还挂在事件上，下次再开一个窗口就会收到两份通知（这次是重复改色，无害，
+        // 但同一模式重复触发本身就不该发生）。
+        Theme.Changed -= OnThemeChanged;
 
         base.OnClosing(e);
     }

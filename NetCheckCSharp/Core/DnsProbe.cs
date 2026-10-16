@@ -48,28 +48,20 @@ public static class DnsProbe
     // 单服务器响应速度
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// 测一台 DNS 服务器解析 <paramref name="domain"/> 的耗时。
+    /// <paramref name="port"/> 平时不用传；只有单元测试会在 127.0.0.1 的临时端口上
+    /// 起一个假应答器来验证收发路径（见 CoreTest 的 DnsProbeLoopback）。
+    /// </summary>
     public static async Task<DnsServerTest> TestServerAsync(
-        string server, string domain, int timeoutMs, CancellationToken ct)
+        string server, string domain, int timeoutMs, CancellationToken ct, int port = 53)
     {
         var r = new DnsServerTest { Server = server };
         try
         {
-            var query = BuildQuery(domain, out ushort id);
-            using var udp = new UdpClient();
-            // Connect 到服务器端点：只接收它的响应。多台并行测试时各用各的 socket，
-            // 但连上之后至少不会把别的源地址来的包当成这一台的回答
-            udp.Connect(server, 53);
-            var sw = Stopwatch.StartNew();
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeoutMs);
-
-            await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
-            var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
-            sw.Stop();
-
-            r.Ms = sw.Elapsed.TotalMilliseconds;
-            var (rcode, answers) = ParseResponse(resp.Buffer, id);
+            var (rcode, answers, ms) = await QueryAAsync(server, port, domain, timeoutMs, ct)
+                .ConfigureAwait(false);
+            r.Ms = ms;
             r.Answers = answers.Count;
             if (rcode != 0) r.Error = $"rcode={rcode}";
         }
@@ -83,6 +75,41 @@ public static class DnsProbe
             r.Error = ex.Message.Length > 40 ? ex.Message[..40] : ex.Message;
         }
         return r;
+    }
+
+    // ------------------------------------------------------------------
+    // 统一的 UDP 查询收发
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 向一台 DNS 发一条 A 记录查询，返回 (rcode, A 记录, 耗时 ms)。
+    /// 测速、劫持检测、结果对比三项共用这一份实现 —— 原来是同一段
+    /// 「建 socket → 发包 → 收包 → 解析」抄了三遍。
+    /// </summary>
+    private static async Task<(int RCode, List<string> Answers, double Ms)> QueryAAsync(
+        string server, int port, string domain, int timeoutMs, CancellationToken ct)
+    {
+        var query = BuildQuery(domain, out ushort id);
+        using var udp = new UdpClient();
+        // Connect 到服务器端点：只接收它的响应。多台并行测试时各用各的 socket，
+        // 但连上之后至少不会把别的源地址来的包当成这一台的回答
+        udp.Connect(server, port);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeoutMs);
+
+        var sw = Stopwatch.StartNew();
+        // 连上之后必须用**不带端点**的重载发包。再传一次 host/port 会走
+        // Socket.SendTo 那条路，而已连接的 socket 不允许指定目标，
+        // 会直接抛「Cannot send packets to an arbitrary host」。
+        // v2.6.1 发布版「所有公共 DNS 都没有响应」就是这一行造成的：
+        // 四台服务器全部命中同一个异常，界面上看起来像网络断了。
+        await udp.SendAsync(query, query.Length).ConfigureAwait(false);
+        var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
+        sw.Stop();
+
+        var (rcode, answers) = ParseResponse(resp.Buffer, id);
+        return (rcode, answers, sw.Elapsed.TotalMilliseconds);
     }
 
     // ------------------------------------------------------------------
@@ -170,18 +197,8 @@ public static class DnsProbe
         var item = new HijackCheck { Server = server };
         try
         {
-            var query = BuildQuery(probeDomain, out ushort id);
-            using var udp = new UdpClient();
-            // Connect 到服务器端点：只接收它的响应，别的源地址来的包不进接收队列
-            udp.Connect(server, 53);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(3000);
-
-            await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
-            var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
-
-            var (rcode, answers) = ParseResponse(resp.Buffer, id);
+            var (rcode, answers, _) = await QueryAAsync(server, 53, probeDomain, 3000, ct)
+                .ConfigureAwait(false);
             item.RCode = rcode;
             item.Answers = answers;
             item.Ok = true;
@@ -205,16 +222,8 @@ public static class DnsProbe
     {
         try
         {
-            var query = BuildQuery(domain, out ushort id);
-            using var udp = new UdpClient();
-            udp.Connect(server, 53);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(3000);
-
-            await udp.SendAsync(query, query.Length, server, 53).ConfigureAwait(false);
-            var resp = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
-            var (_, answers) = ParseResponse(resp.Buffer, id);
+            var (_, answers, _) = await QueryAAsync(server, 53, domain, 3000, ct)
+                .ConfigureAwait(false);
 
             return new DnsComparisonEntry
             {
