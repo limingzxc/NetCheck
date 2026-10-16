@@ -13,9 +13,9 @@ publish/
 __pycache__/
 
 # shots/ 全部是截图与测试运行产物，只保留截图脚本本身。
+# 截图是真实网络环境里抓的（公网出口 IP、归属地、拓扑都可能出现），未脱敏，禁止入库。
 # 注意必须用 shots/* 而不是 shots/：目录被整体忽略后，! 反选不会生效
 shots/*
 !shots/capture.ps1
-!shots/click_test.ps1
 !shots/theme_switch_test.ps1
 !shots/dialog_shot.ps1
